@@ -1,0 +1,28 @@
+[package]
+name = "pow-rs"
+version = "0.1.0"
+authors = ["Zenotta <zenotta@zenotta.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+crunchy = "0.2.2"
+hex = "0.4.2"
+vdf = "0.1.0"
+
+# used for the expansion function
+aes-gcm-siv = "0.9.0"
+
+[features]
+default = ["fips202"]
+cshake = []
+fips202 = ["keccak", "shake", "sha3"]
+k12 = []
+keccak = []
+kmac = ["cshake"]
+parallel_hash = ["cshake"]
+sha3 = []
+shake = []
+sp800 = ["cshake", "kmac", "tuple_hash"]
+tuple_hash = ["cshake"]
