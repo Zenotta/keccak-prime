@@ -14,7 +14,7 @@ use crate::{bits_to_rate, keccakf::KeccakF, Hasher, KeccakState};
 /// # Example
 ///
 /// ```
-/// # use pow_rs::{Hasher, Sha3};
+/// # use keccak_prime::{Hasher, Sha3};
 /// #
 /// # fn main() {
 /// #   let input = b"hello world";

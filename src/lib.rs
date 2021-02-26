@@ -3,7 +3,7 @@
 //! # Example
 //!
 //! ```
-//! # use pow_rs::Hasher;
+//! # use keccak_prime::Hasher;
 //! #
 //! # fn foo<H: Hasher>(mut hasher: H) {
 //! let input_a = b"hello world";
@@ -205,7 +205,7 @@ pub use parallel_hash::{ParallelHash, ParallelHashXof};
 /// # Example
 ///
 /// ```
-/// # use pow_rs::Hasher;
+/// # use keccak_prime::Hasher;
 /// #
 /// # fn foo<H: Hasher>(mut hasher: H) {
 /// let input_a = b"hello world";
@@ -229,7 +229,7 @@ pub trait Hasher {
 /// # Example
 ///
 /// ```
-/// # use pow_rs::IntoXof;
+/// # use keccak_prime::IntoXof;
 /// #
 /// # fn foo<H: IntoXof>(hasher: H) {
 /// let xof = hasher.into_xof();
@@ -256,7 +256,7 @@ pub trait IntoXof {
 /// # Example
 ///
 /// ```
-/// # use pow_rs::Xof;
+/// # use keccak_prime::Xof;
 /// #
 /// # fn foo<X: Xof>(mut xof: X) {
 /// let mut output = [0u8; 64];

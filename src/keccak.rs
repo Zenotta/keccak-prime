@@ -70,7 +70,7 @@ impl Hasher for Keccak {
     /// # Example
     ///
     /// ```
-    /// use pow_rs::{Hasher, Keccak};
+    /// use keccak_prime::{Hasher, Keccak};
     ///
     /// fn main() {
     ///   let mut keccak = Keccak::v256();
@@ -87,7 +87,7 @@ impl Hasher for Keccak {
     /// # Example
     ///
     /// ```
-    /// # use pow_rs::{Hasher, Keccak};
+    /// # use keccak_prime::{Hasher, Keccak};
     /// #
     /// # fn main() {
     /// #   let keccak = Keccak::v256();
