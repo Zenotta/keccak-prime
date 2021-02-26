@@ -269,17 +269,20 @@ pub trait Xof {
     fn squeeze(&mut self, output: &mut [u8]);
 }
 
+#[allow(dead_code)]
 struct EncodedLen {
     offset: usize,
     buffer: [u8; 9],
 }
 
+#[allow(dead_code)]
 impl EncodedLen {
     fn value(&self) -> &[u8] {
         &self.buffer[self.offset..]
     }
 }
 
+#[allow(dead_code)]
 fn left_encode(len: usize) -> EncodedLen {
     let mut buffer = [0u8; 9];
     buffer[1..].copy_from_slice(&(len as u64).to_be_bytes());
@@ -292,6 +295,7 @@ fn left_encode(len: usize) -> EncodedLen {
     }
 }
 
+#[allow(dead_code)]
 fn right_encode(len: usize) -> EncodedLen {
     let mut buffer = [0u8; 9];
     buffer[..8].copy_from_slice(&(len as u64).to_be_bytes());
@@ -481,6 +485,7 @@ impl<P: Permutation> KeccakState<P> {
         self.offset = 0;
     }
 
+    #[allow(dead_code)]
     fn reset(&mut self) {
         self.buffer = Buffer::default();
         self.offset = 0;

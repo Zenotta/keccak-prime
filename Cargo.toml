@@ -1,5 +1,5 @@
 [package]
-name = "pow-rs"
+name = "keccak_prime"
 version = "0.1.0"
 authors = ["Zenotta <zenotta@zenotta.com>"]
 edition = "2018"
@@ -26,3 +26,6 @@ sha3 = []
 shake = []
 sp800 = ["cshake", "kmac", "tuple_hash"]
 tuple_hash = ["cshake"]
+
+[[bin]]
+name = "main"
