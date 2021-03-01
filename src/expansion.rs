@@ -28,10 +28,7 @@ fn derive_aes_key(prev_hash: [u8; INPUT_HASH_SIZE], root_hash: [u8; INPUT_HASH_S
 }
 
 /// Use AES-128 block cipher to generate padding data for the expansion function.
-fn encrypt_pad_round(
-    cipher: &Aes128GcmSiv,
-    round_num: u8,
-) -> Result<[u8; AES128_OUTPUT_SIZE], aes_gcm_siv::aead::Error> {
+fn encrypt_pad_round(cipher: &Aes128GcmSiv, round_num: u8) -> [u8; AES128_OUTPUT_SIZE] {
     // We use the round number as plaintext.
     let mut counter = [round_num; AES128_OUTPUT_SIZE];
     let _auth_tag = cipher.encrypt_in_place_detached(
@@ -39,7 +36,8 @@ fn encrypt_pad_round(
         &[0u8; 0], // we don't have any additional data
         &mut counter,
     );
-    Ok(counter)
+
+    counter
 }
 
 /// Takes a previous hash, root merkle hash and nonce as an input.
@@ -82,7 +80,7 @@ pub fn expand(
 
     let mut result = (0..pad_rounds_num).try_fold(result, |mut result, round_num| {
         // We increment the round number to make IV different from the first one we used above.
-        let ciphertext = encrypt_pad_round(&pad_cipher, (round_num + 1) as u8)?;
+        let ciphertext = encrypt_pad_round(&pad_cipher, (round_num + 1) as u8);
         result.extend_from_slice(&ciphertext);
         Ok(result)
     })?;

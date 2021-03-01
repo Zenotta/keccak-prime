@@ -70,13 +70,13 @@ impl Hasher for Keccak {
     /// # Example
     ///
     /// ```
-    /// use keccak_prime::{Hasher, Keccak};
+    /// # use keccak_prime::{Hasher, Keccak};
     ///
-    /// fn main() {
-    ///   let mut keccak = Keccak::v256();
-    ///   keccak.update(b"hello");
-    ///   keccak.update(b" world");
-    /// }
+    /// # fn main() {
+    /// #   let mut keccak = Keccak::v256();
+    /// #   keccak.update(b"hello");
+    /// #   keccak.update(b" world");
+    /// # }
     /// ```
     fn update(&mut self, input: &[u8]) {
         self.state.update(input);
