@@ -17,6 +17,7 @@ const KEY_LEN: usize = 32;
 /// The usage number is limited to 96 bits.
 const USAGE_MAX: u128 = u128::pow(2, 96 / 8);
 
+/// Simplified Fortuna CSPRNG
 pub struct Fortuna {
     /// Seeded key.
     key: Aes256GcmSiv,
@@ -50,7 +51,7 @@ impl Fortuna {
         }
 
         while len >= 16 {
-            result.extend(self.gen_block()?);
+            result.extend(&self.gen_block()?);
             len -= 16;
         }
 

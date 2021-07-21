@@ -122,7 +122,7 @@ macro_rules! keccak_function {
 }
 
 mod expansion;
-mod fortuna;
+pub mod fortuna;
 pub mod prime;
 
 #[cfg(feature = "k12")]
