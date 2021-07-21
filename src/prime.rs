@@ -9,6 +9,43 @@ use ::vdf::{InvalidIterations, PietrzakVDFParams, VDFParams, VDF};
 use std::error::Error;
 use std::fmt;
 
+/// Size of output for the expansion function.
+/// Can be changed into a parameter for `prime` if needed.
+const EXPANSION_OUTPUT_SIZE: usize = 136; // 1088 bits
+
+/// Keccak-prime function.
+///
+/// ### Arguments
+/// - `prev_hash`: previous block hash.
+/// - `root_hash`: Merkle root hash.
+/// - `nonce`: block nonce.
+/// - `penalty`: applied penalty (regulates a number of extra Keccak permutations).
+/// - `delay`: delay parameter used in the VDF function.
+/// - `vdf_iterations`: a number of VDF iterations.
+pub fn prime(
+    prev_hash: [u8; INPUT_HASH_SIZE],
+    root_hash: [u8; INPUT_HASH_SIZE],
+    nonce: [u8; NONCE_SIZE],
+    penalty: usize,
+    delay: u64,
+    vdf_iterations: usize,
+) -> Result<[u8; INPUT_HASH_SIZE], KeccakPrimeError> {
+    // Expand the block.
+    let block = expand(prev_hash, root_hash, nonce, EXPANSION_OUTPUT_SIZE)?;
+
+    // Execute a chain of VDFs.
+    let mut vdf_output = block;
+    for _i in 0..vdf_iterations {
+        let pietrzak_vdf = PietrzakVDFParams(2048).new();
+        vdf_output = pietrzak_vdf.solve(&vdf_output, delay)?;
+    }
+
+    // Construct a Keccak function with rate=1088 and capacity=512.
+    let mut keccak = Keccak::new(1088 / 8);
+    keccak.update(&vdf_output);
+    Ok(keccak.finalize_with_penalty(penalty))
+}
+
 /// Keccak-prime error.
 #[derive(Debug)]
 pub enum KeccakPrimeError {
@@ -51,39 +88,6 @@ impl Error for KeccakPrimeError {
             KeccakPrimeError::VdfInvalidIterations(_err) => None, // InvalidIterations doesn't implement the Error trait
         }
     }
-}
-
-/// Keccak-prime function.
-///
-/// ### Arguments
-/// - `prev_hash`: previous block hash.
-/// - `root_hash`: Merkle root hash.
-/// - `nonce`: block nonce.
-/// - `penalty`: applied penalty (regulates a number of extra Keccak permutations).
-/// - `delay`: delay parameter used in the VDF function.
-/// - `vdf_iterations`: a number of VDF iterations.
-pub fn prime(
-    prev_hash: [u8; INPUT_HASH_SIZE],
-    root_hash: [u8; INPUT_HASH_SIZE],
-    nonce: [u8; NONCE_SIZE],
-    penalty: usize,
-    delay: u64,
-    vdf_iterations: usize,
-) -> Result<[u8; INPUT_HASH_SIZE], KeccakPrimeError> {
-    // Expand the block.
-    let block = expand(prev_hash, root_hash, nonce)?;
-
-    // Execute a chain of VDFs.
-    let mut vdf_output = block;
-    for _i in 0..vdf_iterations {
-        let pietrzak_vdf = PietrzakVDFParams(2048).new();
-        vdf_output = pietrzak_vdf.solve(&vdf_output, delay)?;
-    }
-
-    // Construct a Keccak function with rate=1088 and capacity=512.
-    let mut keccak = Keccak::new(1088 / 8);
-    keccak.update(&vdf_output);
-    Ok(keccak.finalize_with_penalty(penalty))
 }
 
 #[cfg(test)]
