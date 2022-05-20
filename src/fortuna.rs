@@ -15,7 +15,7 @@ pub const AES_IV_SIZE: usize = 12; // 96 bits
 const KEY_LEN: usize = 32;
 
 /// The usage number is limited to 96 bits.
-const USAGE_MAX: u128 = u128::pow(2, 96 / 8);
+const USAGE_MAX_BITS: u128 = 96;
 
 /// Simplified Fortuna CSPRNG
 pub struct Fortuna {
@@ -89,7 +89,8 @@ impl Fortuna {
         let key = GenericArray::from_slice(key);
         let cipher = Aes256GcmSiv::new(&key);
 
-        let cb = u128::pow(2, 32) * usage % USAGE_MAX;
+        let usage = usage & ((1u128 << USAGE_MAX_BITS) - 1); // limit the usage number to 96 bits
+        let cb = u128::pow(2, 32) * usage;
 
         // Convert 'usage' into its binary representation.
         // This value will be used as one half of the initial key.
