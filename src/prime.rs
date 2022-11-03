@@ -3,9 +3,9 @@
 use crate::{
     expansion::{expand, INPUT_HASH_SIZE, NONCE_SIZE},
     keccak::Keccak,
-    Hasher,
+    sloth, Hasher,
 };
-use ::vdf::{InvalidIterations, PietrzakVDFParams, VDFParams, VDF};
+use num_bigint::BigUint;
 use std::error::Error;
 use std::fmt;
 
@@ -34,15 +34,16 @@ pub fn prime(
     let block = expand(prev_hash, root_hash, nonce, EXPANSION_OUTPUT_SIZE)?;
 
     // Execute a chain of VDFs.
-    let mut vdf_output = block;
+    let mut vdf_output = BigUint::from_bytes_be(&block);
     for _i in 0..vdf_iterations {
-        let pietrzak_vdf = PietrzakVDFParams(2048).new();
-        vdf_output = pietrzak_vdf.solve(&vdf_output, delay)?;
+        vdf_output = sloth::solve(vdf_output, delay);
     }
+
+    let vdf_output_bytes = vdf_output.to_bytes_be();
 
     // Construct a Keccak function with rate=1088 and capacity=512.
     let mut keccak = Keccak::new(1088 / 8);
-    keccak.update(&vdf_output);
+    keccak.update(&vdf_output_bytes);
     Ok(keccak.finalize_with_penalty(penalty))
 }
 
@@ -51,11 +52,6 @@ pub fn prime(
 pub enum KeccakPrimeError {
     /// Opaque AES function failure.
     AesError(aes_gcm_siv::aead::Error),
-
-    /// An error return indicating an invalid number of VDF iterations.  The string is a
-    /// human-readable message describing the valid iterations.  It should not be
-    /// interpreted by programs.
-    VdfInvalidIterations(InvalidIterations),
 }
 
 impl From<aes_gcm_siv::aead::Error> for KeccakPrimeError {
@@ -64,19 +60,10 @@ impl From<aes_gcm_siv::aead::Error> for KeccakPrimeError {
     }
 }
 
-impl From<InvalidIterations> for KeccakPrimeError {
-    fn from(e: InvalidIterations) -> Self {
-        Self::VdfInvalidIterations(e)
-    }
-}
-
 impl fmt::Display for KeccakPrimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             KeccakPrimeError::AesError(e) => write!(f, "AES error: {}", e),
-            KeccakPrimeError::VdfInvalidIterations(e) => {
-                write!(f, "VDF invalid iterations: {:?}", e)
-            }
         }
     }
 }
@@ -85,7 +72,6 @@ impl Error for KeccakPrimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             KeccakPrimeError::AesError(_err) => None, // aes_gcm_siv::Error doesn't implement the Error trait
-            KeccakPrimeError::VdfInvalidIterations(_err) => None, // InvalidIterations doesn't implement the Error trait
         }
     }
 }

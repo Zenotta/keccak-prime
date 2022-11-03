@@ -124,6 +124,7 @@ macro_rules! keccak_function {
 mod expansion;
 pub mod fortuna;
 pub mod prime;
+mod sloth;
 
 #[cfg(feature = "k12")]
 mod keccakp;
