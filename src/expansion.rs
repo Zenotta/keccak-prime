@@ -48,7 +48,6 @@ mod tests {
         let output_size = 136; // 1088 bits
 
         let res = expand(prev_hash, root_hash, nonce, output_size).expect("expand function failed");
-        dbg!(&res);
         assert_eq!(res.len(), output_size);
     }
 }

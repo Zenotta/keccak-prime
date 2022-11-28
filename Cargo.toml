@@ -14,8 +14,10 @@ hex = "0.4.2"
 aes-gcm-siv = "0.9.0"
 
 # used in the SlothVDF implementation
-aes = "0.8"
+num-traits = "0.2"
 num-bigint = "0.4"
+lazy_static = "1.4"
+# crypto-bigint = "0.4"
 
 [features]
 default = ["fips202"]

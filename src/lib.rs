@@ -45,11 +45,13 @@ const RHO: [u32; 24] = [
     1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44,
 ];
 
+/// Pre-computed PI offsets. Rationale for this can be found here:
+/// https://crypto.stackexchange.com/questions/59162/implementation-details-of-the-%CF%80-step-of-the-keccak-round-function
 const PI: [usize; 24] = [
     10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1,
 ];
 
-const WORDS: usize = 25;
+pub(crate) const WORDS: usize = 25;
 
 macro_rules! keccak_function {
     ($doc: expr, $name: ident, $rounds: expr, $rc: expr) => {
@@ -123,8 +125,9 @@ macro_rules! keccak_function {
 
 mod expansion;
 pub mod fortuna;
+mod inverse;
 pub mod prime;
-mod sloth;
+pub mod sloth;
 
 #[cfg(feature = "k12")]
 mod keccakp;
@@ -401,7 +404,6 @@ impl<P: Permutation> KeccakState<P> {
 
     /// Call the permutation function.
     fn keccak(&mut self) {
-        // println!("{:?}", self.buffer.bytes());
         P::execute(&mut self.buffer);
     }
 
@@ -417,7 +419,6 @@ impl<P: Permutation> KeccakState<P> {
         let mut l = input.len();
         let mut rate = self.rate - self.offset;
         let mut offset = self.offset;
-        // println!("len: {}, rate: {}", l, rate);
         while l >= rate {
             self.buffer.xorin(&input[ip..], offset, rate);
             self.keccak();

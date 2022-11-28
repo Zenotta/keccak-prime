@@ -2,7 +2,7 @@ use crate::{Buffer, Permutation};
 
 const ROUNDS: usize = 24;
 
-const RC: [u64; ROUNDS] = [
+pub(crate) const RC: [u64; ROUNDS] = [
     1u64,
     0x8082u64,
     0x800000000000808au64,
