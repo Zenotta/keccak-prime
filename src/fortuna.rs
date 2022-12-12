@@ -51,7 +51,7 @@ impl Fortuna {
         }
 
         while len >= 16 {
-            result.extend(&self.gen_block()?);
+            result.extend(self.gen_block()?);
             len -= 16;
         }
 

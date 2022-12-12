@@ -37,7 +37,7 @@ lazy_static! {
 
 /// Implements the Rho function as seen in Section 3.2 of the paper.
 fn rho(x: Int) -> Int {
-    let x1 = x.modpow(&*SEED_EXPONENT, &*SEED);
+    let x1 = x.modpow(&SEED_EXPONENT, &SEED);
 
     let x2 = (&x * &x1) % &*SEED; // = x ^ ((p + 1) / 4)
     let is_even = &x2 % Int::from(2u8) == Int::zero();
