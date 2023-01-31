@@ -126,6 +126,8 @@ macro_rules! keccak_function {
 mod expansion;
 pub mod fortuna;
 mod inverse;
+mod kiss99;
+pub mod prf;
 pub mod prime;
 pub mod sloth;
 

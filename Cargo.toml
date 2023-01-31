@@ -19,8 +19,10 @@ num-bigint = "0.4"
 lazy_static = "1.4"
 # crypto-bigint = "0.4"
 
+vulkano = { git = "https://github.com/vulkano-rs/vulkano.git", branch = "master", optional = true }
+
 [features]
-default = ["fips202"]
+default = ["fips202", "prf_vulkan"]
 cshake = []
 fips202 = ["keccak", "shake", "sha3"]
 k12 = []
@@ -31,6 +33,9 @@ sha3 = []
 shake = []
 sp800 = ["cshake", "kmac", "tuple_hash"]
 tuple_hash = ["cshake"]
+
+# Vulkan-based GPU compute runtime
+prf_vulkan = ["vulkano"]
 
 [[bin]]
 name = "main"
