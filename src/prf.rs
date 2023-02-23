@@ -234,11 +234,7 @@ mod tests {
 /// GPU compute runtime implementation based on Vulkan
 #[cfg(feature = "prf_vulkan")]
 mod vulkan {
-    use std::{
-        io::{self, Write},
-        process::{Command, Stdio},
-    };
-
+    use std::io;
     use vulkano::{
         buffer::{Buffer, BufferAllocateInfo, BufferUsage},
         command_buffer::{
@@ -259,19 +255,33 @@ mod vulkan {
         VulkanLibrary,
     };
 
+    #[cfg(feature = "prf_vulkan_build_clspv")]
+    pub fn compile_kernel(kern: String) -> io::Result<Vec<u32>> {
+        let output = clspv_sys::compile_from_source(&kern, Default::default());
+        Ok(output.output)
+    }
+
+    /// Compiles an OpenCL kernel into SPIR-V.
     /// Requires a `clspv` compiler.
     ///
     /// ## Returns
     ///
     /// A compiled SPIR-V binary.
-    // TODO: consider pre-packaging clspv as a library instead
-    pub fn compile_kernel(kern: String) -> io::Result<Vec<u8>> {
+    #[cfg(not(feature = "prf_vulkan_build_clspv"))]
+    pub fn compile_kernel(kern: String) -> io::Result<Vec<u32>> {
+        use std::{
+            convert::TryInto,
+            io::Write,
+            process::{Command, Stdio},
+        };
+
         let mut clspv = Command::new("clspv")
             .arg("-o")
             .arg("-")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "clspv compiler not found"))?;
 
         let mut stdin = clspv.stdin.take().expect("Failed to open stdin");
 
@@ -284,12 +294,16 @@ mod vulkan {
         let output = clspv.wait_with_output().expect("Failed to read stdout");
         dbg!(&output.stderr);
 
-        Ok(output.stdout)
+        Ok(output
+            .stdout
+            .chunks_exact(4)
+            .map(|word| u32::from_ne_bytes(word.try_into().unwrap()))
+            .collect())
     }
 
     /// ## Inputs
     /// - `compute_shader` - SPIR-V binary of a compiled program.
-    pub fn execute(compute_shader: &[u8], mix: [u32; 512]) {
+    pub fn execute(compute_shader: &[u32], mix: [u32; 512]) {
         let library = VulkanLibrary::new().unwrap();
 
         let instance = Instance::new(
@@ -349,7 +363,7 @@ mod vulkan {
 
         let pipeline = {
             let shader =
-                unsafe { ShaderModule::from_bytes(device.clone(), &compute_shader).unwrap() };
+                unsafe { ShaderModule::from_words(device.clone(), &compute_shader).unwrap() };
 
             ComputePipeline::new(
                 device.clone(),

@@ -20,9 +20,10 @@ lazy_static = "1.4"
 # crypto-bigint = "0.4"
 
 vulkano = { git = "https://github.com/vulkano-rs/vulkano.git", branch = "master", optional = true }
+clspv-sys = { git = "https://github.com/nbaksalyar/clspv-sys.git", branch = "main", optional = true }
 
 [features]
-default = ["fips202", "prf_vulkan"]
+default = ["fips202", "prf_vulkan", "prf_vulkan_build_clspv"]
 cshake = []
 fips202 = ["keccak", "shake", "sha3"]
 k12 = []
@@ -36,6 +37,10 @@ tuple_hash = ["cshake"]
 
 # Vulkan-based GPU compute runtime
 prf_vulkan = ["vulkano"]
+
+# If this feature is enabled, it will use `clspv-sys` dependency to automatically
+# download and build `clspv`, OpenCL -> Vulkan SPIR-V compiler.
+prf_vulkan_build_clspv = ["clspv-sys"]
 
 [[bin]]
 name = "main"
