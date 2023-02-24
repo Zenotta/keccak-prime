@@ -319,7 +319,6 @@ mod vulkan {
         let device_extensions = DeviceExtensions {
             khr_storage_buffer_storage_class: true,
             khr_variable_pointers: true,
-            khr_shader_non_semantic_info: true,
             ..DeviceExtensions::empty()
         };
 
