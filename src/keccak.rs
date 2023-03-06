@@ -59,7 +59,7 @@ impl Keccak {
 
 impl Keccak {
     /// Squeeze the state to the output (256 bits) and apply an extra number of permutations.
-    pub fn finalize_with_penalty(self, penalty: usize) -> [u8; 32] {
+    pub fn finalize_with_penalty(self, penalty: u32) -> [u8; 32] {
         self.state.finalize_with_penalty(penalty)
     }
 }

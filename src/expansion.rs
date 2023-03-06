@@ -1,53 +1,81 @@
 //! Implements the expansion function.
 
-use crate::fortuna::*;
-use crate::prime::KeccakPrimeError;
+use crate::constants::{BLOCK_HEADER_SIZE, INPUT_HASH_SIZE, NONCE_SIZE};
+use crate::prng::{self, PrngState};
 
-/// Hash inputs sizes, in bytes.
-pub const INPUT_HASH_SIZE: usize = 32; // 256 bits
+use num_bigint::BigUint;
 
-/// Input nonce size, in bytes.
-pub const NONCE_SIZE: usize = 8; // 64 bits
+use std::convert::TryInto;
+
+const USAGE_NUMBER: u8 = 0xff;
 
 /// Takes a previous hash, root merkle hash and nonce as an input.
-/// Outputs a byte sequence of length `output_size` (in bytes) suitable to be used in a VDF permutation function.
+/// Outputs a value in the domain of the VDF permutation function.
 pub fn expand(
     prev_hash: [u8; INPUT_HASH_SIZE],
     root_hash: [u8; INPUT_HASH_SIZE],
     nonce: [u8; NONCE_SIZE],
-    output_size: usize,
-) -> Result<Vec<u8>, KeccakPrimeError> {
-    // Derive an AES key from the previous & Merkle tree hashes.
-    let derived_key = derive_aes_key(prev_hash, root_hash);
-    let usage = 256 * (u64::from_be_bytes(nonce) as u128) + 256 - 1;
-    let mut fortuna = Fortuna::new(&derived_key, usage)?;
-    let result = fortuna.get_bytes(output_size)?;
-    Ok(result)
+    penalty: u32,
+    delay: u32,
+    max: BigUint,
+) -> BigUint {
+    // integer X chosen uniformly at random from the set of integers {0, 1, ... max}.
+    let mut prng = PrngState::new(
+        &derive_key(prev_hash, root_hash, nonce, penalty, delay),
+        USAGE_NUMBER,
+    );
+
+    loop {
+        let byte_array = prng.get_bytes(168); // 1344 bits = SHAKE-128 bit rate
+
+        let x = BigUint::new(unsafe {
+            let (_prefix, digits_u32, _suffix) = byte_array.align_to::<u32>();
+            digits_u32.to_owned()
+        });
+
+        if x <= max {
+            return x;
+        }
+    }
 }
 
-/// Derives a symmetric encryption key for the AES-256 block cipher.
-fn derive_aes_key(prev_hash: [u8; INPUT_HASH_SIZE], root_hash: [u8; INPUT_HASH_SIZE]) -> [u8; 32] {
-    let mut xor_result = [0u8; INPUT_HASH_SIZE];
-    for i in 0..INPUT_HASH_SIZE {
-        xor_result[i] = prev_hash[i] ^ root_hash[i];
-    }
-    xor_result
+/// Derives a key for the PRNG.
+fn derive_key(
+    prev_hash: [u8; INPUT_HASH_SIZE],
+    root_hash: [u8; INPUT_HASH_SIZE],
+    nonce: [u8; NONCE_SIZE],
+    penalty: u32,
+    delay: u32,
+) -> [u8; BLOCK_HEADER_SIZE] {
+    let mut key = Vec::with_capacity(prng::KEY_LEN);
+
+    key.extend_from_slice(&prev_hash);
+    key.extend_from_slice(&root_hash);
+    key.extend_from_slice(&delay.to_le_bytes());
+    key.extend_from_slice(&penalty.to_le_bytes());
+    key.extend_from_slice(&nonce);
+
+    key[0..BLOCK_HEADER_SIZE].try_into().unwrap()
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::constants::MAX;
+
     use super::*;
 
     // Verify that the output has an expected size.
     #[test]
     fn verify_output_size() {
+        // prime 𝑞 = 21600 − 2273;
+        // integer max = 𝑞 − 1.
+
         let prev_hash = [1u8; INPUT_HASH_SIZE];
         let root_hash = [2u8; INPUT_HASH_SIZE];
         let nonce = [3u8; NONCE_SIZE];
 
-        let output_size = 136; // 1088 bits
+        let res = expand(prev_hash, root_hash, nonce, 0, 0, MAX.clone());
 
-        let res = expand(prev_hash, root_hash, nonce, output_size).expect("expand function failed");
-        assert_eq!(res.len(), output_size);
+        assert!(res <= *MAX);
     }
 }

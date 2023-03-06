@@ -1,50 +1,66 @@
 //! Implements the Keccak-prime function.
 
 use crate::{
-    expansion::{expand, INPUT_HASH_SIZE, NONCE_SIZE},
+    constants::{BLOCK_HEADER_SIZE, INPUT_HASH_SIZE, MAX, NONCE_SIZE},
+    expansion::expand,
     keccak::Keccak,
+    prf::prf,
     sloth, Hasher,
 };
-use num_bigint::BigUint;
-use std::error::Error;
 use std::fmt;
+use std::{convert::TryInto, error::Error};
 
-/// Size of output for the expansion function.
-/// Can be changed into a parameter for `prime` if needed.
-const EXPANSION_OUTPUT_SIZE: usize = 136; // 1088 bits
-
-/// Keccak-prime function.
+/// Keccak-prime block linking function.
 ///
 /// ### Arguments
+/// - `header_of_block_k`
+/// - `prev_hash_of_prev_block`
 /// - `prev_hash`: previous block hash.
 /// - `root_hash`: Merkle root hash.
 /// - `nonce`: block nonce.
 /// - `penalty`: applied penalty (regulates a number of extra Keccak permutations).
 /// - `delay`: delay parameter used in the VDF function.
-/// - `vdf_iterations`: a number of VDF iterations.
-pub fn prime(
+///
+/// ### Returns
+/// - `witness` number. It can be verified using the [crate::vdf::verify] function.
+/// - `output_hash`.
+pub fn link_blocks(
+    header_of_block_k: [u8; BLOCK_HEADER_SIZE],
+    prev_hash_of_prev_block: [u8; INPUT_HASH_SIZE],
     prev_hash: [u8; INPUT_HASH_SIZE],
     root_hash: [u8; INPUT_HASH_SIZE],
     nonce: [u8; NONCE_SIZE],
-    penalty: usize,
-    delay: u64,
-    vdf_iterations: usize,
-) -> Result<[u8; INPUT_HASH_SIZE], KeccakPrimeError> {
-    // Expand the block.
-    let block = expand(prev_hash, root_hash, nonce, EXPANSION_OUTPUT_SIZE)?;
+    penalty: u32,
+    delay: u32,
+) -> Result<(Vec<u8>, [u8; INPUT_HASH_SIZE]), KeccakPrimeError> {
+    // Expand the block header to the VDF domain.
+    let vdf_input = expand(prev_hash, root_hash, nonce, penalty, delay, MAX.clone());
 
-    // Execute a chain of VDFs.
-    let mut vdf_output = BigUint::from_bytes_be(&block);
-    for _i in 0..vdf_iterations {
-        vdf_output = sloth::solve(vdf_output, delay);
-    }
+    // Execute VDF.
+    let witness = sloth::solve(vdf_input, delay);
+    let witness_bytes = witness.to_bytes_be();
 
-    let vdf_output_bytes = vdf_output.to_bytes_be();
+    // Call PRF.
+    let y = prf(
+        &header_of_block_k,
+        &witness_bytes[0..200].try_into().unwrap(), // FIXME
+    );
+
+    // Hash the results
+    let mut hash_bytes = Vec::with_capacity(y.len() + INPUT_HASH_SIZE * 3 + NONCE_SIZE);
+    hash_bytes.extend_from_slice(&y);
+    hash_bytes.extend_from_slice(&prev_hash);
+    hash_bytes.extend_from_slice(&root_hash);
+    hash_bytes.extend_from_slice(&delay.to_le_bytes());
+    hash_bytes.extend_from_slice(&penalty.to_le_bytes());
+    hash_bytes.extend_from_slice(&nonce);
+    hash_bytes.extend_from_slice(&prev_hash_of_prev_block);
 
     // Construct a Keccak function with rate=1088 and capacity=512.
     let mut keccak = Keccak::new(1088 / 8);
-    keccak.update(&vdf_output_bytes);
-    Ok(keccak.finalize_with_penalty(penalty))
+    keccak.update(&hash_bytes);
+
+    Ok((witness_bytes, keccak.finalize_with_penalty(penalty)))
 }
 
 /// Keccak-prime error.
@@ -78,8 +94,8 @@ impl Error for KeccakPrimeError {
 
 #[cfg(test)]
 mod tests {
-    use super::prime;
-    use crate::expansion::{INPUT_HASH_SIZE, NONCE_SIZE};
+    use super::*;
+    use crate::constants::{INPUT_HASH_SIZE, NONCE_SIZE};
 
     #[test]
     fn keccak_prime_test() {
@@ -87,7 +103,18 @@ mod tests {
         let root_hash = [2u8; INPUT_HASH_SIZE];
         let nonce = [3u8; NONCE_SIZE];
 
-        dbg!(prime(prev_hash, root_hash, nonce, 100, 100, 10)
-            .expect("Failed to execute Keccak-prime"));
+        let header_of_block_k = [4; BLOCK_HEADER_SIZE];
+        let prev_hash_of_prev_block = [5; INPUT_HASH_SIZE];
+
+        dbg!(link_blocks(
+            header_of_block_k,
+            prev_hash_of_prev_block,
+            prev_hash,
+            root_hash,
+            nonce,
+            100,
+            100
+        )
+        .expect("Failed to execute Keccak-prime"));
     }
 }

@@ -123,13 +123,19 @@ macro_rules! keccak_function {
     }
 }
 
+pub mod constants;
 mod expansion;
+#[cfg(feature = "fortuna")]
+#[deprecated(note = "Use module `prng` instead")]
 pub mod fortuna;
 mod inverse;
 mod kiss99;
 pub mod prf;
 pub mod prime;
+pub mod prng;
 pub mod sloth;
+
+pub use prime::link_blocks;
 
 #[cfg(feature = "k12")]
 mod keccakp;
@@ -312,7 +318,7 @@ fn right_encode(len: usize) -> EncodedLen {
 }
 
 /// Holds internal Keccak state.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Buffer([u64; WORDS]);
 
 impl Buffer {
@@ -375,13 +381,13 @@ trait Permutation {
     fn execute(a: &mut Buffer);
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Mode {
     Absorbing,
     Squeezing,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct KeccakState<P> {
     buffer: Buffer,
     offset: usize,
@@ -465,7 +471,7 @@ impl<P: Permutation> KeccakState<P> {
 
     /// Squeezes Keccak state into a 256-bit string.
     /// If `penalty` equals 0, the result will be the same as with the original Keccak function.
-    pub(crate) fn finalize_with_penalty(mut self, penalty: usize) -> [u8; 32] {
+    pub(crate) fn finalize_with_penalty(mut self, penalty: u32) -> [u8; 32] {
         let mut output = [0u8; 32];
 
         // Apply permutation func repeatedly for a number of `penalty` times
@@ -498,7 +504,7 @@ impl<P: Permutation> KeccakState<P> {
     }
 }
 
-fn bits_to_rate(bits: usize) -> usize {
+const fn bits_to_rate(bits: usize) -> usize {
     200 - bits / 4
 }
 

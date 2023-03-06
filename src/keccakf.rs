@@ -31,7 +31,7 @@ pub(crate) const RC: [u64; ROUNDS] = [
 
 keccak_function!("`keccak-f[1600, 24]`", keccakf, ROUNDS, RC);
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct KeccakF;
 
 impl Permutation for KeccakF {

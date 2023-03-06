@@ -1,6 +1,8 @@
 //! Pseudorandom function based on the ProgPoW algorithm.
 //! https://eips.ethereum.org/EIPS/eip-1057#specification
 
+use std::convert::TryInto;
+
 use crate::kiss99::{fnv1a, kiss99, Kiss99State, FNV_OFFSET_BASIS};
 
 /// Blocks before changing the random program
@@ -21,21 +23,45 @@ pub const PROGPOW_CNT_CACHE: usize = 0; // 11
 pub const PROGPOW_CNT_MATH: usize = 18;
 
 /// Pseudorandom function.
-pub fn prf(block_header: &[u8; 80], witness: &[u8; 200]) -> [u8; 136] {
-    // todo: use const for `mix_state` size
-    let mut mix_state = [0u32; 512];
+pub fn prf(_block_header: &[u8; 80], witness: &[u8; 200]) -> [u8; 136] {
+    let mut mix_state = [0u32; PROGPOW_REGS * PROGPOW_LANES];
 
-    // todo: initialize PRNG with seed `block_header`
-    fill_mix(0, 0, &mut mix_state);
+    // initialize PRNG with data from witness
+    for lane_id in 0..PROGPOW_LANES {
+        fill_mix(
+            u64::from_le_bytes(
+                witness[(lane_id * 8)..((lane_id + 1) * 8)]
+                    .try_into()
+                    .unwrap(), // FIXME
+            ),
+            lane_id as u32,
+            &mut mix_state,
+        );
+    }
 
     //
     let prog_source = generate_kernel(0); // TODO: use actual block header as a seed
 
     let prog = vulkan::compile_kernel(prog_source).unwrap();
 
-    vulkan::execute(&prog, mix_state);
+    let updated_mix_data = vulkan::execute(&prog, mix_state);
 
-    [0; 136]
+    // Reduce mix data to a per-lane 32-bit digest
+    let mut digest_lane = [0u32; PROGPOW_LANES];
+    let mut result = Vec::<u8>::with_capacity(136);
+
+    for lane_id in 0..PROGPOW_LANES {
+        digest_lane[lane_id] = FNV_OFFSET_BASIS;
+        digest_lane[lane_id] = fnv1a(digest_lane[lane_id], updated_mix_data[lane_id]);
+
+        // FIXME: excessive memory copying
+        result.extend_from_slice(&digest_lane[lane_id].to_le_bytes());
+    }
+
+    // Concat lane digests with the remainder of the witness number
+    result.extend_from_slice(&witness[128..200]); // fixme: don't use magical numbers
+
+    result.try_into().unwrap() // fixme: unwrap
 }
 
 /// Populates an array of u32 values used by each lane in the hash calculations.
@@ -303,7 +329,7 @@ mod vulkan {
 
     /// ## Inputs
     /// - `compute_shader` - SPIR-V binary of a compiled program.
-    pub fn execute(compute_shader: &[u32], mix: [u32; 512]) {
+    pub fn execute(compute_shader: &[u32], mix: [u32; 512]) -> Vec<u32> {
         let library = VulkanLibrary::new().unwrap();
 
         let instance = Instance::new(
@@ -436,6 +462,6 @@ mod vulkan {
         // Retrieve the buffer contents - it should now contain the mixed data.
         let data_buffer_content = input_buffer.read().unwrap();
 
-        dbg!(&data_buffer_content[..]);
+        data_buffer_content.to_vec()
     }
 }
