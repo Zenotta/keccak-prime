@@ -30,11 +30,20 @@ pub fn link_blocks(
     prev_hash: [u8; INPUT_HASH_SIZE],
     root_hash: [u8; INPUT_HASH_SIZE],
     nonce: [u8; NONCE_SIZE],
-    penalty: u32,
-    delay: u32,
+    penalty: u16,
+    delay: u16,
+    loop_count: u16,
 ) -> Result<(Vec<u8>, [u8; INPUT_HASH_SIZE]), KeccakPrimeError> {
     // Expand the block header to the VDF domain.
-    let vdf_input = expand(prev_hash, root_hash, nonce, penalty, delay, MAX.clone());
+    let vdf_input = expand(
+        prev_hash,
+        root_hash,
+        nonce,
+        penalty,
+        delay,
+        loop_count,
+        MAX.clone(),
+    );
 
     // Execute VDF.
     let witness = sloth::solve(vdf_input, delay);
@@ -112,6 +121,7 @@ mod tests {
             prev_hash,
             root_hash,
             nonce,
+            100,
             100,
             100
         )

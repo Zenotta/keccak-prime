@@ -471,7 +471,7 @@ impl<P: Permutation> KeccakState<P> {
 
     /// Squeezes Keccak state into a 256-bit string.
     /// If `penalty` equals 0, the result will be the same as with the original Keccak function.
-    pub(crate) fn finalize_with_penalty(mut self, penalty: u32) -> [u8; 32] {
+    pub(crate) fn finalize_with_penalty(mut self, penalty: u16) -> [u8; 32] {
         let mut output = [0u8; 32];
 
         // Apply permutation func repeatedly for a number of `penalty` times

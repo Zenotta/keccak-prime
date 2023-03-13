@@ -9,7 +9,7 @@ pub(crate) const KEY_LEN: usize = 166; // 1328 bits
 /// Based on `SHAKE` extendable-output functions defined in [`FIPS-202`].
 ///
 /// [`FIPS-202`]: https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.202.pdf
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PrngState {
     state: KeccakState<KeccakF>,
 }
@@ -93,5 +93,17 @@ mod tests {
         let byte2 = rng.get_bytes(1);
 
         assert_ne!(byte1, byte2);
+    }
+
+    #[test]
+    fn prng_test_vectors() {
+        {
+            let key = hex::decode("164f659995f4ec98377c8f7b16e22be5682d115624ea429a4ed422325c151f82b3af308743907f92b8a2b25ceca5ae5b762d54ffe6b84dabfc985d6db451d44717819bdcb563a30c79e29e12115413b1f395af84310ddbe3d4c110fb1566286c8471b2cbfc6af6e7944a264308b6ca658cd2256539ae1edb0a00fe213d8e939b2f699899768e4095812ab5e463588910ecc264a20e81d21f63e3932baad311a544d1e39b7997").unwrap();
+            let mut prng = PrngState::new(&key, 0xf6);
+
+            let res = prng.get_bytes(167);
+            let expected_res = hex::decode("407a8e20ac21746f7acd3762c1d39e3e87d33ec1e3f2252745c4ee02935d2f865da019bb512bfbf43160a25f0aa8898e9609e9611d8d423205fcfe74c904c6c0426956f90b7641c6fb856bfb1cb31f4fbb8dbb9c95a6f1851d55e8c48b86e96048cccc623b3e90c88dd2d08fe3dca02e273431ba66096104c59d6d73465465307aa03b6a9c5a84edd94ad2a67cec97a5a5b32a0af718cf34bfce7fc56dfacfd764065722458abb").unwrap();
+            assert_eq!(res, expected_res);
+        }
     }
 }

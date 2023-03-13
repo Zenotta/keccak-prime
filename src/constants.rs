@@ -8,7 +8,7 @@ pub const BLOCK_HEADER_SIZE: usize = 80; // in bytes; 640 bits
 /// Hash inputs sizes, in bytes.
 pub const INPUT_HASH_SIZE: usize = 32; // 256 bits
 /// Input nonce size, in bytes.
-pub const NONCE_SIZE: usize = 8; // 64 bits
+pub const NONCE_SIZE: usize = 10; // 80 bits
 /// fixme
 pub const HASH_LENGTH: usize = 32; // 256 bits
 
