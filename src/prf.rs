@@ -67,14 +67,14 @@ pub fn prf(_block_header: &[u8; 80], witness: &[u8; 200]) -> [u8; 136] {
 /// Populates an array of u32 values used by each lane in the hash calculations.
 // todo: use const for `mix_state` size
 fn fill_mix(seed: u64, lane_id: u32, mix_state: &mut [u32; 512]) {
-    let mut rng_state: Kiss99State = Default::default();
-
     // Use FNV to expand the per-warp seed to per-lane
     // Use KISS to expand the per-lane seed to fill mix
-    rng_state.z = fnv1a(FNV_OFFSET_BASIS, seed as u32);
-    rng_state.w = fnv1a(FNV_OFFSET_BASIS, (seed >> 32) as u32);
-    rng_state.jsr = fnv1a(FNV_OFFSET_BASIS, lane_id);
-    rng_state.jcong = fnv1a(FNV_OFFSET_BASIS, lane_id);
+    let mut rng_state = Kiss99State {
+        z: fnv1a(FNV_OFFSET_BASIS, seed as u32),
+        w: fnv1a(FNV_OFFSET_BASIS, (seed >> 32) as u32),
+        jsr: fnv1a(FNV_OFFSET_BASIS, lane_id),
+        jcong: fnv1a(FNV_OFFSET_BASIS, lane_id),
+    };
 
     for k in &mut mix_state[..] {
         *k = kiss99(&mut rng_state);
@@ -388,7 +388,7 @@ mod vulkan {
 
         let pipeline = {
             let shader =
-                unsafe { ShaderModule::from_words(device.clone(), &compute_shader).unwrap() };
+                unsafe { ShaderModule::from_words(device.clone(), compute_shader).unwrap() };
 
             ComputePipeline::new(
                 device.clone(),

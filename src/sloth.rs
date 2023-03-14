@@ -76,7 +76,7 @@ fn sigma_generic<KeccakF: FnMut(&mut [u64; WORDS])>(mut keccak_fn: KeccakF, x: I
 
         let res = Int::from_bytes_be(&out);
 
-        if &res < &*SEED {
+        if res < *SEED {
             return res;
         }
     }
@@ -155,7 +155,7 @@ mod tests {
 
         // verify the result
         let instant = Instant::now();
-        assert!(verify(x, witness.clone(), t));
+        assert!(verify(x, witness, t));
         println!("verified in {} ms", instant.elapsed().as_millis());
     }
 

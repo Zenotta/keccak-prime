@@ -34,7 +34,7 @@ pub const FNV_PRIME: u32 = 0x1000193;
 pub const FNV_OFFSET_BASIS: u32 = 0x811c9dc5;
 
 pub const fn fnv1a(h: u32, d: u32) -> u32 {
-    return (h ^ d).wrapping_mul(FNV_PRIME);
+    (h ^ d).wrapping_mul(FNV_PRIME)
 }
 
 #[cfg(test)]
@@ -63,6 +63,7 @@ mod test {
         // https://eips.ethereum.org/assets/eip-1057/test-vectors#kiss99
         let expected_values = [769445856, 742012328, 2121196314, 2805620942];
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..4 {
             assert_eq!(kiss99(&mut state), expected_values[i]);
         }
