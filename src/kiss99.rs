@@ -44,19 +44,19 @@ mod test {
     // Using test vectors from EIP-1057
     // https://eips.ethereum.org/assets/eip-1057/test-vectors#fnv1a
     #[test]
-    fn test_fnv1a() {
-        assert_eq!(fnv1a(0x811C9DC5, 0xDDD0A47B), 0xD37EE61A);
-        assert_eq!(fnv1a(0xD37EE61A, 0xEE304846), 0xDEDC7AD4);
-        assert_eq!(fnv1a(0xDEDC7AD4, 0x00000000), 0xA9155BBC);
+    fn fnv1a_test_vectors() {
+        assert_eq!(fnv1a(0x811c9dc5, 0xddd0a47b), 0xd37ee61a);
+        assert_eq!(fnv1a(0xd37ee61a, 0xee304846), 0xdedc7ad4);
+        assert_eq!(fnv1a(0xdedc7ad4, 0x00000000), 0xa9155bbc);
     }
 
     #[test]
-    fn test_kiss99() {
+    fn kiss99_test_vectors() {
         let mut state = Kiss99State {
-            z: 362436069,
-            w: 521288629,
-            jsr: 123456789,
-            jcong: 380116160,
+            z: 0x159a55e5,
+            w: 0x1f123bb5,
+            jsr: 0x075bcd15,
+            jcong: 0x16a81cc0,
         };
 
         // Expected return values for each iteration starting from 0
