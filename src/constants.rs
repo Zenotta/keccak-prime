@@ -11,6 +11,25 @@ pub const INPUT_HASH_SIZE: usize = 32; // 256 bits
 pub const NONCE_SIZE: usize = 10; // 80 bits
 /// fixme
 pub const HASH_LENGTH: usize = 32; // 256 bits
+/// Size of the result of VDF.
+pub const WITNESS_SIZE: usize = 200; // 1600 bits
+
+/// Blocks before changing the random program
+pub const PROGPOW_PERIOD: usize = 10;
+/// Lanes that work together calculating a hash
+pub const PROGPOW_LANES: usize = 16;
+/// uint32 registers per lane
+pub const PROGPOW_REGS: usize = 32;
+/// uint32 loads from the DAG per lane
+pub const PROGPOW_DAG_LOADS: usize = 0; // 4
+/// size of the cached portion of the DAG
+pub const PROGPOW_CACHE_BYTES: usize = 16 * 1024;
+/// DAG accesses, also the number of loops executed
+pub const PROGPOW_CNT_DAG: usize = 64;
+/// random cache accesses per loop
+pub const PROGPOW_CNT_CACHE: usize = 0; // 11
+/// random math instructions per loop
+pub const PROGPOW_CNT_MATH: usize = 18;
 
 /// Arbitrary-precision integer type. Defined for portability.
 pub type Int = BigUint;

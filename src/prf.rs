@@ -1,29 +1,17 @@
 //! Pseudorandom function based on the ProgPoW algorithm.
 //! https://eips.ethereum.org/EIPS/eip-1057#specification
 
+use crate::constants::*;
 use std::convert::TryInto;
 
 use crate::kiss99::{fnv1a, kiss99, Kiss99State, FNV_OFFSET_BASIS};
 
-/// Blocks before changing the random program
-pub const PROGPOW_PERIOD: usize = 10;
-/// Lanes that work together calculating a hash
-pub const PROGPOW_LANES: usize = 16;
-/// uint32 registers per lane
-pub const PROGPOW_REGS: usize = 32;
-/// uint32 loads from the DAG per lane
-pub const PROGPOW_DAG_LOADS: usize = 0; // 4
-/// size of the cached portion of the DAG
-pub const PROGPOW_CACHE_BYTES: usize = 16 * 1024;
-/// DAG accesses, also the number of loops executed
-pub const PROGPOW_CNT_DAG: usize = 64;
-/// random cache accesses per loop
-pub const PROGPOW_CNT_CACHE: usize = 0; // 11
-/// random math instructions per loop
-pub const PROGPOW_CNT_MATH: usize = 18;
-
 /// Pseudorandom function.
-pub fn prf(_block_header: &[u8; 80], witness: &[u8; 200]) -> [u8; 136] {
+pub fn prf(
+    block_k_root_hash: &[u8; INPUT_HASH_SIZE],
+    witness: &[u8; WITNESS_SIZE],
+    loop_count: u16,
+) -> [u8; 136] {
     let mut mix_state = [0u32; PROGPOW_REGS * PROGPOW_LANES];
 
     // initialize PRNG with data from witness
@@ -39,7 +27,7 @@ pub fn prf(_block_header: &[u8; 80], witness: &[u8; 200]) -> [u8; 136] {
         );
     }
 
-    //
+    // Generate and compile a program for execution on GPU.
     let prog_source = generate_kernel(0); // TODO: use actual block header as a seed
 
     let prog = vulkan::compile_kernel(prog_source).unwrap();
@@ -66,15 +54,14 @@ pub fn prf(_block_header: &[u8; 80], witness: &[u8; 200]) -> [u8; 136] {
 
 /// Populates an array of u32 values used by each lane in the hash calculations.
 // todo: use const for `mix_state` size
-fn fill_mix(seed: u64, lane_id: u32, mix_state: &mut [u32; 512]) {
+fn fill_mix(seed: u64, lane_id: u32, mix_state: &mut [u32; PROGPOW_REGS * PROGPOW_LANES]) {
     // Use FNV to expand the per-warp seed to per-lane
     // Use KISS to expand the per-lane seed to fill mix
-    let mut rng_state = Kiss99State {
-        z: fnv1a(FNV_OFFSET_BASIS, seed as u32),
-        w: fnv1a(FNV_OFFSET_BASIS, (seed >> 32) as u32),
-        jsr: fnv1a(FNV_OFFSET_BASIS, lane_id),
-        jcong: fnv1a(FNV_OFFSET_BASIS, lane_id),
-    };
+    let mut rng_state = Kiss99State::default();
+    rng_state.z = fnv1a(FNV_OFFSET_BASIS, seed as u32);
+    rng_state.w = fnv1a(rng_state.z, (seed >> 32) as u32);
+    rng_state.jsr = fnv1a(rng_state.w, lane_id);
+    rng_state.jcong = fnv1a(rng_state.jsr, lane_id);
 
     for k in &mut mix_state[..] {
         *k = kiss99(&mut rng_state);
@@ -212,6 +199,7 @@ fn generate_random_math_func(a: &str, b: &str, r: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::{fill_mix, generate_kernel, prf};
+    use crate::constants::*;
 
     #[test]
     fn generate_kernel_test() {
@@ -221,38 +209,31 @@ mod tests {
 
     #[test]
     fn test_exec() {
-        prf(&[0; 80], &[0; 200]);
+        prf(&[0; INPUT_HASH_SIZE], &[0; WITNESS_SIZE], 1);
     }
 
     #[test]
-    fn test_fill_mix() {
-        // The test vectors from eip-1057 [0] are not correct: they have been obtained
-        // from `fill_mix` which had differences from the reference implementation in
-        // the specification. So instead of these test vectors, we use our own,
-        // obtained from a C program that uses code from the actual specification.
-        //
-        // [0] https://eips.ethereum.org/assets/eip-1057/test-vectors#fill_mix
-
+    fn fill_mix_test_vectors() {
         let hash_seed = 0xEE304846DDD0A47B;
 
         {
             let lane_id = 0;
-            let mut mix_state = [0u32; 512];
+            let mut mix_state = [0u32; PROGPOW_REGS * PROGPOW_LANES];
             fill_mix(hash_seed, lane_id, &mut mix_state);
 
-            assert_eq!(mix_state[0], 0x2ec0fa6b);
-            assert_eq!(mix_state[3], 0x1a364ce9);
-            assert_eq!(mix_state[5], 0x5e084dd8);
+            assert_eq!(mix_state[0], 0x10c02f0d);
+            assert_eq!(mix_state[3], 0x43f0394d);
+            assert_eq!(mix_state[5], 0xc4e89d4c);
         }
 
         {
             let lane_id = 13;
-            let mut mix_state = [0u32; 512];
+            let mut mix_state = [0u32; PROGPOW_REGS * PROGPOW_LANES];
             fill_mix(hash_seed, lane_id, &mut mix_state);
 
-            assert_eq!(mix_state[0], 0x65dfd176);
-            assert_eq!(mix_state[3], 0x124affa7);
-            assert_eq!(mix_state[5], 0x2d67ebc0);
+            assert_eq!(mix_state[0], 0x4e46d05d);
+            assert_eq!(mix_state[3], 0x70712177);
+            assert_eq!(mix_state[5], 0xbef18d17);
         }
     }
 }
@@ -260,6 +241,7 @@ mod tests {
 /// GPU compute runtime implementation based on Vulkan
 #[cfg(feature = "prf_vulkan")]
 mod vulkan {
+    use crate::constants::*;
     use std::io;
     use vulkano::{
         buffer::{Buffer, BufferAllocateInfo, BufferUsage},
@@ -329,7 +311,7 @@ mod vulkan {
 
     /// ## Inputs
     /// - `compute_shader` - SPIR-V binary of a compiled program.
-    pub fn execute(compute_shader: &[u32], mix: [u32; 512]) -> Vec<u32> {
+    pub fn execute(compute_shader: &[u32], mix: [u32; PROGPOW_REGS * PROGPOW_LANES]) -> Vec<u32> {
         let library = VulkanLibrary::new().unwrap();
 
         let instance = Instance::new(

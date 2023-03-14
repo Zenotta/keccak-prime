@@ -23,7 +23,7 @@ vulkano = { git = "https://github.com/vulkano-rs/vulkano.git", branch = "master"
 clspv-sys = { git = "https://github.com/nbaksalyar/clspv-sys.git", branch = "main", optional = true }
 
 [features]
-default = ["fips202", "fortuna", "prf_vulkan", "prf_vulkan_build_clspv"]
+default = ["fips202", "prf_vulkan", "prf_vulkan_build_clspv"]
 cshake = []
 fips202 = ["keccak", "shake", "sha3"]
 k12 = []
