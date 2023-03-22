@@ -377,6 +377,13 @@ impl Buffer {
     }
 }
 
+impl From<[u8; WORDS * 8]> for Buffer {
+    fn from(value: [u8; WORDS * 8]) -> Self {
+        let val64: [u64; WORDS] = unsafe { core::mem::transmute(value) };
+        Buffer(val64.clone())
+    }
+}
+
 trait Permutation {
     fn execute(a: &mut Buffer);
 }
@@ -390,7 +397,7 @@ enum Mode {
 #[derive(Clone, Debug)]
 struct KeccakState<P> {
     buffer: Buffer,
-    offset: usize,
+    offset_bits: usize,
     rate: usize,
     delim: u8,
     mode: Mode,
@@ -399,10 +406,15 @@ struct KeccakState<P> {
 
 impl<P: Permutation> KeccakState<P> {
     fn new(rate: usize, delim: u8) -> Self {
+        Self::new_with_buffer(rate, delim, Buffer::default(), 0)
+    }
+
+    /// Creates a new KeccakState with pre-set buffer state.
+    fn new_with_buffer(rate: usize, delim: u8, buffer: Buffer, offset_bits: usize) -> Self {
         assert!(rate != 0, "rate cannot be equal 0");
         KeccakState {
-            buffer: Buffer::default(),
-            offset: 0,
+            buffer,
+            offset_bits,
             rate,
             delim,
             mode: Mode::Absorbing,
@@ -425,8 +437,8 @@ impl<P: Permutation> KeccakState<P> {
         //first foldp
         let mut ip = 0;
         let mut l = input.len();
-        let mut rate = self.rate - self.offset;
-        let mut offset = self.offset;
+        let mut rate = self.rate - (self.offset_bits / 8);
+        let mut offset = self.offset_bits / 8;
         while l >= rate {
             self.buffer.xorin(&input[ip..], offset, rate);
             self.keccak();
@@ -437,11 +449,11 @@ impl<P: Permutation> KeccakState<P> {
         }
 
         self.buffer.xorin(&input[ip..], offset, l);
-        self.offset = offset + l;
+        self.offset_bits = (offset + l) * 8;
     }
 
     fn pad(&mut self) {
-        self.buffer.pad(self.offset, self.delim, self.rate);
+        self.buffer.pad(self.offset_bits / 8, self.delim, self.rate);
     }
 
     fn squeeze(&mut self, output: &mut [u8]) {
@@ -454,8 +466,9 @@ impl<P: Permutation> KeccakState<P> {
         // second foldp
         let mut op = 0;
         let mut l = output.len();
-        let mut rate = self.rate - self.offset;
-        let mut offset = self.offset;
+        let mut rate = self.rate - (self.offset_bits / 8);
+        let mut offset = self.offset_bits / 8;
+
         while l >= rate {
             self.buffer.setout(&mut output[op..], offset, rate);
             self.keccak();
@@ -466,7 +479,77 @@ impl<P: Permutation> KeccakState<P> {
         }
 
         self.buffer.setout(&mut output[op..], offset, l);
-        self.offset = offset + l;
+        self.offset_bits = (offset + l) * 8;
+    }
+
+    fn print_internal_state(&self) -> String {
+        self.buffer
+            .0
+            .iter()
+            .map(|u| hex::encode(&u.to_ne_bytes()))
+            .fold(String::new(), |a, b| a + &b + " ")
+    }
+
+    fn squeeze_bits(&mut self, bits: usize, output: &mut [u8]) {
+        use bitvec::prelude::*;
+
+        if let Mode::Absorbing = self.mode {
+            self.mode = Mode::Squeezing;
+            self.pad();
+            self.fill_block();
+        }
+
+        let read_bits = ((self.offset_bits & 7) + bits + 7) & !7; // round up the number of bits to the nearest 8
+        let mut buffer = vec![0; read_bits / 8]; // temp buffer that may need to hold more bytes than `output`
+
+        // second foldp
+        let mut op = 0; // output position - in bytes
+        let mut l = bits; // in bits
+        let mut rate_bits = self.rate * 8 - self.offset_bits;
+        let mut offset_bits = self.offset_bits;
+
+        // This part is executed only if the number of bits requested is greater than
+        // the number of bits we already have got in Keccak-state.
+        // In `squeeze_bits`, this part has no differences from the regular `squeeze` function.
+        while l >= rate_bits {
+            self.buffer
+                .setout(&mut buffer[op..], offset_bits / 8, rate_bits / 8);
+            self.keccak();
+
+            op += rate_bits / 8;
+            l -= rate_bits;
+            rate_bits = self.rate * 8;
+            offset_bits = 0;
+        }
+
+        // l = 3, offset = 7
+        //        v
+        // 1111 0001
+
+        // Squeeze the remainder
+        // dbg!(offset_bits & 7, offset_bits, read_bits);
+
+        self.buffer
+            .setout(&mut buffer[op..], offset_bits / 8, read_bits / 8);
+        // dbg!(hex::encode(&buffer));
+
+        // FIXME: is there a better way to do this?
+        let mut bitvec = buffer
+            .view_bits::<Msb0>()
+            .to_owned()
+            .split_off(offset_bits & 7);
+        bitvec.truncate(bits);
+        bitvec.force_align();
+
+        // pad to the required length
+        // FIXME: make this more efficient
+        let pad_count = ((l + 7) & !7) - l;
+        for _i in 0..pad_count {
+            bitvec.insert(0, false);
+        }
+
+        output.copy_from_slice(bitvec.as_raw_slice());
+        self.offset_bits = offset_bits + l;
     }
 
     /// Squeezes Keccak state into a 256-bit string.
@@ -493,13 +576,13 @@ impl<P: Permutation> KeccakState<P> {
 
     fn fill_block(&mut self) {
         self.keccak();
-        self.offset = 0;
+        self.offset_bits = 0;
     }
 
     #[allow(dead_code)]
     fn reset(&mut self) {
         self.buffer = Buffer::default();
-        self.offset = 0;
+        self.offset_bits = 0;
         self.mode = Mode::Absorbing;
     }
 }
