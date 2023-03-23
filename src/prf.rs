@@ -9,13 +9,15 @@ use crate::kiss99::{fnv1a, kiss99, Kiss99State, FNV_OFFSET_BASIS};
 const MERGE_MAX_R: u16 = 4;
 const MATH_MAX_R: u16 = 10;
 
+#[cfg(test)]
 fn debug_mix_data(mix_data: &[u32; PROGPOW_REGS * PROGPOW_LANES]) -> String {
     mix_data
         .iter()
-        .map(|num| hex::encode(&num.to_be_bytes()))
+        .map(|num| hex::encode(num.to_be_bytes()))
         .fold(String::new(), |a, b| a + &b + " ")
 }
 
+#[cfg(test)]
 fn debug_mix_lane(mix_state_lane: &[u32]) -> String {
     let mix_state_hex = mix_state_lane
         .iter()
@@ -202,7 +204,7 @@ fn generate_kernel(block_k_root_hash: &[u8; INPUT_HASH_SIZE], loop_count: u16) -
 
     // Unroll the loop count.
     for _i in 0..loop_count {
-        buffer.push_str(&generate_progpow_loop_iter(&block_k_root_hash));
+        buffer.push_str(&generate_progpow_loop_iter(block_k_root_hash));
     }
     buffer.push_str("}\n");
 
@@ -592,10 +594,7 @@ mod vulkan {
     mod tests {
         use crate::{
             constants::{INPUT_HASH_SIZE, PROGPOW_LANES, PROGPOW_REGS},
-            prf::{
-                generate_kernel, generate_merge_func, generate_progpow_loop_iter,
-                generate_random_math_func,
-            },
+            prf::{generate_kernel, generate_merge_func, generate_random_math_func},
         };
 
         use super::*;

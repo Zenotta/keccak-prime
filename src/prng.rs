@@ -19,6 +19,7 @@ pub struct PrngState {
 impl PrngState {
     const DELIM: u8 = 0x1f;
 
+    #[cfg(test)]
     pub(crate) fn print_internal_state(&self) {
         dbg!(self.state.print_internal_state(), self.state.offset_bits);
     }

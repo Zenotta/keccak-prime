@@ -77,7 +77,6 @@ pub fn link_blocks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::{INPUT_HASH_SIZE, NONCE_SIZE};
 
     #[test]
     fn keccak_prime_test() {

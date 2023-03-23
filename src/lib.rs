@@ -380,7 +380,7 @@ impl Buffer {
 impl From<[u8; WORDS * 8]> for Buffer {
     fn from(value: [u8; WORDS * 8]) -> Self {
         let val64: [u64; WORDS] = unsafe { core::mem::transmute(value) };
-        Buffer(val64.clone())
+        Buffer(val64)
     }
 }
 
@@ -485,11 +485,12 @@ impl<P: Permutation> KeccakState<P> {
         self.offset_bits = (offset + l) * 8;
     }
 
+    #[cfg(test)]
     fn print_internal_state(&self) -> String {
         self.buffer
             .0
             .iter()
-            .map(|u| hex::encode(&u.to_ne_bytes()))
+            .map(|u| hex::encode(u.to_ne_bytes()))
             .fold(String::new(), |a, b| a + &b + " ")
     }
 
@@ -525,16 +526,11 @@ impl<P: Permutation> KeccakState<P> {
             offset_bits = 0;
         }
 
-        // l = 3, offset = 7
-        //        v
-        // 1111 0001
-
         // Squeeze the remainder
-        // dbg!(offset_bits & 7, offset_bits, read_bits);
+        // dbg!(offset_bits & 7, offset_bits, read_bits, l);
 
         self.buffer
             .setout(&mut buffer[op..], offset_bits / 8, read_bits / 8);
-        // dbg!(hex::encode(&buffer));
 
         // FIXME: is there a better way to do this?
         let mut bitvec = buffer
