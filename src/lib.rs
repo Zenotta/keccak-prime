@@ -456,11 +456,14 @@ impl<P: Permutation> KeccakState<P> {
         self.buffer.pad(self.offset_bits / 8, self.delim, self.rate);
     }
 
-    fn squeeze(&mut self, output: &mut [u8]) {
+    fn squeeze(&mut self, output: &mut [u8], penalty: u16) {
         if let Mode::Absorbing = self.mode {
             self.mode = Mode::Squeezing;
             self.pad();
             self.fill_block();
+            for _i in 0..penalty {
+                self.keccak();
+            }
         }
 
         // second foldp
@@ -557,21 +560,16 @@ impl<P: Permutation> KeccakState<P> {
     pub(crate) fn finalize_with_penalty(mut self, penalty: u16) -> [u8; 32] {
         let mut output = [0u8; 32];
 
-        // Apply permutation func repeatedly for a number of `penalty` times
-        for _i in 0..penalty {
-            self.keccak();
-        }
-
         // The permutation fn should run only once because len = 256 (32 * 8) is less than the
         // expected rate of 1088 bits. Hence, we'll take only the first 256 bits out of the
         // current state and discard everything else.
-        self.squeeze(&mut output);
+        self.squeeze(&mut output, penalty);
 
         output
     }
 
     fn finalize(mut self, output: &mut [u8]) {
-        self.squeeze(output);
+        self.squeeze(output, 0);
     }
 
     fn fill_block(&mut self) {

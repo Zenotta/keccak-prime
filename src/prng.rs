@@ -66,7 +66,7 @@ impl PrngState {
     /// Generates a pseudorandom bit string of length `len` in bytes.
     pub fn get_bytes(&mut self, len: usize) -> Vec<u8> {
         let mut result = vec![0; len];
-        self.state.squeeze(&mut result);
+        self.state.squeeze(&mut result, 0);
         result
     }
 

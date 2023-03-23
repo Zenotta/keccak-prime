@@ -51,6 +51,6 @@ impl Hasher for Shake {
 
 impl Xof for Shake {
     fn squeeze(&mut self, output: &mut [u8]) {
-        self.state.squeeze(output)
+        self.state.squeeze(output, 0)
     }
 }
