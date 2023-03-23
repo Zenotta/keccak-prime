@@ -58,7 +58,7 @@ pub fn prf(
 
         let prog = vulkan::compile_kernel(prog_source).unwrap();
 
-        vulkan::execute(&prog, mix_state).try_into().unwrap()
+        vulkan::execute(&prog, mix_state)
     } else {
         mix_state
     };
@@ -134,8 +134,8 @@ fn generate_progpow_loop_iter(block_k_root_hash: &[u8; INPUT_HASH_SIZE]) -> Stri
     for i in 0..PROGPOW_REGS {
         mix_seq_dst[i] = i as u32;
     }
-    for i in (0..PROGPOW_REGS - 1).rev() {
-        let j = get_rand((i as u16) + 1);
+    for i in (1..PROGPOW_REGS).rev() {
+        let j = get_rand(i as u16);
         mix_seq_dst.swap(i, j as usize);
     }
 
@@ -167,7 +167,7 @@ fn generate_progpow_loop_iter(block_k_root_hash: &[u8; INPUT_HASH_SIZE]) -> Stri
         buffer.push_str(&generate_random_math_func(
             &format!("mix[{src1}]"),
             &format!("mix[{src2}]"),
-            sel1,
+            sel1 as u32,
         ));
         buffer.push_str(";\n");
 
@@ -211,9 +211,9 @@ fn generate_kernel(block_k_root_hash: &[u8; INPUT_HASH_SIZE], loop_count: u16) -
     buffer.push_str(
         "__kernel void ProgPoW(__global uint32_t mix[PROGPOW_LANES * PROGPOW_REGS]) {{\n\
             #pragma unroll 1\n\
-            for (uint32_t h = 0; h < PROGPOW_LANES; h++) {{\n\
+            for (uint32_t l = 0; l < PROGPOW_LANES; l++) {{\n\
                 barrier(CLK_LOCAL_MEM_FENCE);\n\
-                progPowLoop(&mix[h * PROGPOW_REGS]);\n\
+                progPowLoop(&mix[l * PROGPOW_REGS]);\n\
             }}\n\
         }}\n",
     );
@@ -233,16 +233,17 @@ fn generate_merge_func(a: &str, b: &str, rand: u32) -> String {
             "rotate({a}, (uint32_t)({bits})) ^ {b}",
             bits = ((rand >> 16) % 31) + 1
         ),
-        3 | _ => format!(
+        3 => format!(
             "rotate({a}, (uint32_t)(32 - {bits})) ^ {b}",
             bits = ((rand >> 16) % 31) + 1
         ),
+        _ => unreachable!(),
     }
 }
 
-fn generate_random_math_func(a: &str, b: &str, rand: u16) -> String {
-    // mix[l][src1], mix[l][src2], sel1)
+fn generate_random_math_func(a: &str, b: &str, rand: u32) -> String {
     match rand % 11 {
+        0 => format!("{a} + {b}"),
         1 => format!("{a} * {b}"),
         2 => format!("mul_hi({a}, {b})"),
         3 => format!("min({a}, {b})"),
@@ -253,7 +254,7 @@ fn generate_random_math_func(a: &str, b: &str, rand: u16) -> String {
         8 => format!("{a} ^ {b}"),
         9 => format!("clz({a}) + clz({b})"),
         10 => format!("popcount({a}) + popcount({b})"),
-        0 | _ => format!("{a} + {b}"),
+        _ => unreachable!(),
     }
 }
 
@@ -381,10 +382,9 @@ mod tests {
 /// GPU compute runtime implementation based on Vulkan
 #[cfg(feature = "prf_vulkan")]
 mod vulkan {
-    use crate::constants::*;
     use std::io;
     use vulkano::{
-        buffer::{Buffer, BufferAllocateInfo, BufferUsage},
+        buffer::{Buffer, BufferAllocateInfo, BufferContents, BufferUsage},
         command_buffer::{
             allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
         },
@@ -406,7 +406,7 @@ mod vulkan {
     #[cfg(feature = "prf_vulkan_build_clspv")]
     pub fn compile_kernel(kern: String) -> io::Result<Vec<u32>> {
         let output = clspv_sys::compile_from_source(&kern, Default::default());
-        // dbg!(output.ret_code, output.log);
+        dbg!(output.ret_code, output.log);
         Ok(output.output)
     }
 
@@ -452,7 +452,7 @@ mod vulkan {
 
     /// ## Inputs
     /// - `compute_shader` - SPIR-V binary of a compiled program.
-    pub fn execute(compute_shader: &[u32], mix: [u32; PROGPOW_LANES * PROGPOW_REGS]) -> Vec<u32> {
+    pub fn execute<T: BufferContents + Sized + Clone>(compute_shader: &[u32], input_data: T) -> T {
         let library = VulkanLibrary::new().unwrap();
 
         let instance = Instance::new(
@@ -536,11 +536,10 @@ mod vulkan {
                     buffer_usage: BufferUsage::STORAGE_BUFFER,
                     ..Default::default()
                 },
-                mix,
+                input_data,
             )
             .unwrap()
         };
-        // dbg!(mix.len() * 8);
         // dbg!(input_buffer.size());
 
         // Create a descriptor set for the buffer.
@@ -569,7 +568,7 @@ mod vulkan {
                 0,
                 set,
             )
-            .dispatch([1024, 1, 1])
+            .dispatch([1, 1, 1]) // FIXME: correct number of groups
             .unwrap();
 
         let command_buffer = builder.build().unwrap();
@@ -586,8 +585,255 @@ mod vulkan {
         future.wait(timeout).unwrap();
 
         // Retrieve the buffer contents - it should now contain the mixed data.
-        let data_buffer_content = input_buffer.read().unwrap();
+        let output_buffer_content = input_buffer.read().unwrap();
+        (*output_buffer_content).clone()
+    }
 
-        data_buffer_content.to_vec()
+    // Vulkan-specific tests
+    #[cfg(test)]
+    mod tests {
+        use crate::{
+            constants::{INPUT_HASH_SIZE, PROGPOW_LANES, PROGPOW_REGS},
+            prf::{
+                generate_kernel, generate_merge_func, generate_progpow_loop_iter,
+                generate_random_math_func,
+            },
+        };
+
+        use super::*;
+
+        #[test]
+        fn test_maths_functions() {
+            let inputs = [
+                0x8626bb1f_u32, // a
+                0xbbdfbc4e,     // b
+                0x3f4bdfac,
+                0xd79e414f,
+                0x6d175b7e,
+                0xc4e89d4c,
+                0x2eddd94c,
+                0x7e70cb54,
+                0x61ae0e62,
+                0xe0596b32,
+                0x8a81e396,
+                0x3f4bdfac,
+                0x8a81e396,
+                0x7e70cb54,
+                0xa7352f36,
+                0xa0eb7045,
+                0xc89805af,
+                0x64291e2f,
+                0x760726d3,
+                0x79fc6a48,
+                0x75551d43,
+                0x3383ba34,
+                0xea260841,
+                0xe92c44b7,
+            ];
+
+            let random_vals = [
+                0x883e5b49_u32,
+                0x36b71236,
+                0x944ecabb,
+                0x3f472a85,
+                0x3f472a85,
+                0xcec46e67,
+                0xdbe71ff7,
+                0x59e7b9d8,
+                0x1bdc84a9,
+                0xc675cac5,
+                0x2863ad31,
+                0xf83ffe7d,
+            ];
+
+            let expected = [
+                0x4206776d_u32,
+                0x4c5cb214,
+                0x53e9023f,
+                0x2eddd94c,
+                0x61ae0e62,
+                0x1e3968a8,
+                0x1e3968a8,
+                0xa0212004,
+                0xecb91faf,
+                0x0ffb4c9b,
+                0x00000003,
+                0x0000001b,
+            ];
+
+            // Generate a kernel from the test vectors
+            let mut buffer = String::with_capacity(1024);
+
+            buffer.push_str(&format!(
+                "typedef unsigned int uint32_t;\n\
+                void __kernel ProgPoW(__global uint32_t test_data[{inputs_len}]) {{\n",
+                inputs_len = inputs.len()
+            ));
+            for (i, rand) in random_vals.iter().enumerate() {
+                buffer.push_str(&format!(
+                    "test_data[{res_idx}] = {maths_fn};\n",
+                    res_idx = i * 2 + 1,
+                    maths_fn = generate_random_math_func(
+                        &format!("test_data[{}]", i * 2),
+                        &format!("test_data[{}]", i * 2 + 1),
+                        *rand
+                    )
+                ));
+            }
+            buffer.push_str("}\n");
+
+            println!("{}", buffer);
+
+            let compute_shader = compile_kernel(buffer).unwrap();
+            let res = execute(&compute_shader, inputs);
+
+            for (idx, x) in res.iter().skip(1).step_by(2).enumerate() {
+                assert_eq!(expected[idx], *x);
+            }
+        }
+
+        #[test]
+        fn test_merge_functions() {
+            let inputs = [
+                0x3b0bb37d_u32, // a
+                0xa0212004,     // b
+                0x10c02f0d,
+                0x870fa227,
+                0x24d2bae4,
+                0x0ffb4c9b,
+                0xda39e821,
+                0x089c4008,
+            ];
+
+            let random_vals = [0x9bd26ab0_u32, 0xd4f45515, 0x7fdbc2f2, 0x8b6cd8c3];
+
+            let expected = [0x3ca34321_u32, 0x91c1326a, 0x2eddd94c, 0x8a81e396];
+
+            // Generate a kernel from the test vectors
+            let mut buffer = String::with_capacity(1024);
+
+            buffer.push_str(&format!(
+                "typedef unsigned int uint32_t;\n\
+                void __kernel ProgPoW(__global uint32_t test_data[{inputs_len}]) {{\n",
+                inputs_len = inputs.len()
+            ));
+            for (i, rand) in random_vals.iter().enumerate() {
+                buffer.push_str(&format!(
+                    "test_data[{res_idx}] = {maths_fn};\n",
+                    res_idx = i * 2 + 1,
+                    maths_fn = generate_merge_func(
+                        &format!("test_data[{}]", i * 2),
+                        &format!("test_data[{}]", i * 2 + 1),
+                        *rand
+                    )
+                ));
+            }
+            buffer.push_str("}\n");
+
+            println!("{}", buffer);
+
+            let compute_shader = compile_kernel(buffer).unwrap();
+            let res = execute(&compute_shader, inputs);
+
+            for r in res {
+                println!("{}", hex::encode(r.to_be_bytes()));
+            }
+
+            for (idx, x) in res.iter().skip(1).step_by(2).enumerate() {
+                assert_eq!(expected[idx], *x);
+            }
+        }
+
+        #[test]
+        fn test_progpow() {
+            // Generate a kernel for a single ProgPoW loop
+            let mix_lane = [0u32; PROGPOW_REGS * PROGPOW_LANES];
+            let expected = [
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000040, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000,
+                0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000040, 0x00000000, 0x00000000,
+                0x00000000,
+            ];
+
+            let buffer = generate_kernel(&[0; INPUT_HASH_SIZE], 1);
+            println!("{}", buffer);
+
+            let compute_shader = compile_kernel(buffer).unwrap();
+            let res = execute(&compute_shader, mix_lane);
+
+            for (idx, r) in res.iter().enumerate() {
+                assert_eq!(*r, expected[idx]);
+            }
+        }
     }
 }
