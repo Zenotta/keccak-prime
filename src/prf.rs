@@ -2,12 +2,45 @@
 //! https://eips.ethereum.org/EIPS/eip-1057#specification
 
 use crate::{constants::*, prng::PrngState};
-use std::convert::TryInto;
+use std::{convert::TryInto, error::Error, fmt};
 
 use crate::kiss99::{fnv1a, kiss99, Kiss99State, FNV_OFFSET_BASIS};
 
 const MERGE_MAX_R: u16 = 4;
 const MATH_MAX_R: u16 = 10;
+
+/// Error occurred during the pseudorandom function execution.
+#[derive(Debug)]
+pub enum PrfError {
+    #[cfg(feature = "prf_vulkan")]
+    /// Vulkan runtime error (such as a device initialization error).
+    VulkanError(String, Option<Box<dyn std::error::Error + 'static>>),
+}
+
+impl fmt::Display for PrfError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            #[cfg(feature = "prf_vulkan")]
+            PrfError::VulkanError(description, cause) => {
+                if let Some(cause) = cause {
+                    write!(f, "Vulkan error: {}, caused by: {}", description, cause)
+                } else {
+                    write!(f, "Vulkan error: {}", description)
+                }
+            }
+        }
+    }
+}
+
+impl Error for PrfError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            #[cfg(feature = "prf_vulkan")]
+            PrfError::VulkanError(_, Some(err)) => Some(&**err),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 fn debug_mix_data(mix_data: &[u32; PROGPOW_REGS * PROGPOW_LANES]) -> String {
@@ -33,7 +66,7 @@ pub fn prf(
     block_k_root_hash: &[u8; INPUT_HASH_SIZE],
     witness: &[u8; WITNESS_SIZE],
     loop_count: u16,
-) -> [u8; 136] {
+) -> Result<[u8; 136], PrfError> {
     let mut mix_state = [0u32; PROGPOW_REGS * PROGPOW_LANES];
 
     // initialize PRNG with data from witness
@@ -41,7 +74,7 @@ pub fn prf(
         let seed = u64::from_be_bytes(
             witness[(lane_id * 8)..((lane_id + 1) * 8)]
                 .try_into()
-                .unwrap(), // FIXME
+                .expect("unexpected witness input size"), // this basically shouldn't happen because it's a fixed-size array
         );
         fill_mix(
             seed,
@@ -60,7 +93,7 @@ pub fn prf(
 
         let prog = vulkan::compile_kernel(prog_source).unwrap();
 
-        vulkan::execute(&prog, mix_state)
+        vulkan::execute(&prog, mix_state)?
     } else {
         mix_state
     };
@@ -85,17 +118,17 @@ pub fn prf(
     }
 
     // Concat lane digests with the remainder of the witness number
-    result.extend_from_slice(&witness[128..200]); // fixme: don't use magical numbers
+    result.extend_from_slice(&witness[(PROGPOW_LANES * 8)..]);
 
-    result.try_into().unwrap() // fixme: unwrap
+    Ok(result.try_into().expect("unexpected output size"))
 }
 
 /// Returns a digest of mix_state.
 fn reduce_mix(mix_state: &[u32; PROGPOW_REGS]) -> u32 {
     let mut digest_lane = FNV_OFFSET_BASIS;
 
-    for lane_id in 0..PROGPOW_REGS {
-        digest_lane = fnv1a(digest_lane, mix_state[lane_id]);
+    for lane in mix_state.iter().take(PROGPOW_REGS) {
+        digest_lane = fnv1a(digest_lane, *lane);
     }
 
     digest_lane
@@ -133,6 +166,7 @@ fn generate_progpow_loop_iter(block_k_root_hash: &[u8; INPUT_HASH_SIZE]) -> Stri
     // guarantees every destination merged once
     // guarantees no duplicate cache reads, which could be optimized away
     // Uses Fisher-Yates shuffle
+    #[allow(clippy::needless_range_loop)] // clippy's suggestion is less readable
     for i in 0..PROGPOW_REGS {
         mix_seq_dst[i] = i as u32;
     }
@@ -287,7 +321,7 @@ mod tests {
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             ];
 
-            let res = prf(&[0; INPUT_HASH_SIZE], &[0; WITNESS_SIZE], 0);
+            let res = prf(&[0; INPUT_HASH_SIZE], &[0; WITNESS_SIZE], 0).unwrap();
 
             assert_eq!(res, expected);
         }
@@ -327,7 +361,7 @@ mod tests {
                 0x6e, 0x9b, 0xc2, 0x85, 0xbe, 0xd7, 0x72, 0x08, 0x15, 0x35,
             ];
 
-            let res = prf(&k, &witness, 2);
+            let res = prf(&k, &witness, 2).unwrap();
 
             assert_eq!(res, expected);
         }
@@ -384,30 +418,148 @@ mod tests {
 mod vulkan {
     use std::io;
     use vulkano::{
-        buffer::{Buffer, BufferAllocateInfo, BufferContents, BufferUsage},
+        buffer::{Buffer, BufferAllocateInfo, BufferContents, BufferError, BufferUsage},
         command_buffer::{
-            allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
+            allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, BuildError,
+            CommandBufferBeginError, CommandBufferExecError, CommandBufferUsage,
+            PipelineExecutionError,
         },
         descriptor_set::{
-            allocator::StandardDescriptorSetAllocator, PersistentDescriptorSet, WriteDescriptorSet,
+            allocator::StandardDescriptorSetAllocator, DescriptorSetCreationError,
+            PersistentDescriptorSet, WriteDescriptorSet,
         },
         device::{
-            physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceExtensions,
-            QueueCreateInfo, QueueFlags,
+            physical::PhysicalDeviceType, Device, DeviceCreateInfo, DeviceCreationError,
+            DeviceExtensions, QueueCreateInfo, QueueFlags,
         },
-        instance::{Instance, InstanceCreateInfo},
+        instance::{Instance, InstanceCreateInfo, InstanceCreationError},
         memory::allocator::StandardMemoryAllocator,
-        pipeline::{ComputePipeline, Pipeline, PipelineBindPoint},
-        shader::ShaderModule,
-        sync::{self, GpuFuture},
-        VulkanLibrary,
+        pipeline::{
+            compute::ComputePipelineCreationError, ComputePipeline, Pipeline, PipelineBindPoint,
+        },
+        shader::{ShaderCreationError, ShaderModule},
+        sync::{self, FlushError, GpuFuture},
+        LoadingError, VulkanError, VulkanLibrary,
     };
+
+    use super::PrfError;
+
+    impl From<InstanceCreationError> for PrfError {
+        fn from(value: InstanceCreationError) -> Self {
+            PrfError::VulkanError(
+                "failed to create a device instance".to_owned(),
+                Some(Box::new(value)),
+            )
+        }
+    }
+
+    impl From<DescriptorSetCreationError> for PrfError {
+        fn from(value: DescriptorSetCreationError) -> Self {
+            PrfError::VulkanError(
+                "failed to create a descriptor set".to_owned(),
+                Some(Box::new(value)),
+            )
+        }
+    }
+
+    impl From<ShaderCreationError> for PrfError {
+        fn from(value: ShaderCreationError) -> Self {
+            PrfError::VulkanError(
+                "failed to initialize a shader".to_owned(),
+                Some(Box::new(value)),
+            )
+        }
+    }
+
+    impl From<DeviceCreationError> for PrfError {
+        fn from(value: DeviceCreationError) -> Self {
+            PrfError::VulkanError(
+                "failed to create a Vulkan device".to_owned(),
+                Some(Box::new(value)),
+            )
+        }
+    }
+
+    impl From<BufferError> for PrfError {
+        fn from(value: BufferError) -> Self {
+            PrfError::VulkanError("buffer error".to_owned(), Some(Box::new(value)))
+        }
+    }
+
+    impl From<BuildError> for PrfError {
+        fn from(value: BuildError) -> Self {
+            PrfError::VulkanError(
+                "command buffer build error".to_owned(),
+                Some(Box::new(value)),
+            )
+        }
+    }
+
+    impl From<PipelineExecutionError> for PrfError {
+        fn from(value: PipelineExecutionError) -> Self {
+            PrfError::VulkanError(
+                "Vulkan pipeline execution error".to_owned(),
+                Some(Box::new(value)),
+            )
+        }
+    }
+
+    impl From<CommandBufferBeginError> for PrfError {
+        fn from(value: CommandBufferBeginError) -> Self {
+            PrfError::VulkanError("Vulkan buffer error".to_owned(), Some(Box::new(value)))
+        }
+    }
+
+    impl From<ComputePipelineCreationError> for PrfError {
+        fn from(value: ComputePipelineCreationError) -> Self {
+            PrfError::VulkanError(
+                "failed to create a compute pipeline".to_owned(),
+                Some(Box::new(value)),
+            )
+        }
+    }
+
+    impl From<CommandBufferExecError> for PrfError {
+        fn from(value: CommandBufferExecError) -> Self {
+            PrfError::VulkanError(
+                "failed to execute a command buffer".to_owned(),
+                Some(Box::new(value)),
+            )
+        }
+    }
+
+    impl From<FlushError> for PrfError {
+        fn from(value: FlushError) -> Self {
+            PrfError::VulkanError(
+                "failed to flush a command buffer".to_owned(),
+                Some(Box::new(value)),
+            )
+        }
+    }
+
+    impl From<LoadingError> for PrfError {
+        fn from(value: LoadingError) -> Self {
+            PrfError::VulkanError(
+                "failed to initialize Vulkan".to_owned(),
+                Some(Box::new(value)),
+            )
+        }
+    }
+
+    impl From<VulkanError> for PrfError {
+        fn from(value: VulkanError) -> Self {
+            PrfError::VulkanError("Vulkan runtime error".to_owned(), Some(Box::new(value)))
+        }
+    }
 
     #[cfg(feature = "prf_vulkan_build_clspv")]
     pub fn compile_kernel(kern: String) -> io::Result<Vec<u32>> {
         let output = clspv_sys::compile_from_source(&kern, Default::default());
-        dbg!(output.ret_code, output.log);
-        Ok(output.output)
+        if output.ret_code == 0 {
+            Ok(output.output)
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, output.log))
+        }
     }
 
     /// Compiles an OpenCL kernel into SPIR-V.
@@ -441,19 +593,25 @@ mod vulkan {
         });
 
         let output = clspv.wait_with_output().expect("Failed to read stdout");
-        dbg!(&output.stderr);
 
-        Ok(output
-            .stdout
-            .chunks_exact(4)
-            .map(|word| u32::from_ne_bytes(word.try_into().unwrap()))
-            .collect())
+        if output.status.success() {
+            Ok(output
+                .stdout
+                .chunks_exact(4)
+                .map(|word| u32::from_ne_bytes(word.try_into().unwrap()))
+                .collect())
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, output.stderr))
+        }
     }
 
     /// ## Inputs
     /// - `compute_shader` - SPIR-V binary of a compiled program.
-    pub fn execute<T: BufferContents + Sized + Clone>(compute_shader: &[u32], input_data: T) -> T {
-        let library = VulkanLibrary::new().unwrap();
+    pub fn execute<T: BufferContents + Sized + Clone>(
+        compute_shader: &[u32],
+        input_data: T,
+    ) -> Result<T, PrfError> {
+        let library = VulkanLibrary::new()?;
 
         let instance = Instance::new(
             library,
@@ -461,8 +619,7 @@ mod vulkan {
                 enumerate_portability: true,
                 ..Default::default()
             },
-        )
-        .unwrap();
+        )?;
 
         // Choose which physical device to use
         let device_extensions = DeviceExtensions {
@@ -473,8 +630,7 @@ mod vulkan {
 
         // Get a device and a compute queue.
         let (physical_device, queue_family_index) = instance
-            .enumerate_physical_devices()
-            .unwrap()
+            .enumerate_physical_devices()?
             .filter(|p| p.supported_extensions().contains(&device_extensions))
             .filter_map(|p| {
                 p.queue_family_properties()
@@ -490,7 +646,9 @@ mod vulkan {
                 PhysicalDeviceType::Other => 4,
                 _ => 5,
             })
-            .unwrap();
+            .ok_or_else(|| {
+                PrfError::VulkanError("no valid Vulkan device has been found".to_owned(), None)
+            })?;
 
         // Initialise the device.
         let (device, mut queues) = Device::new(
@@ -503,24 +661,25 @@ mod vulkan {
                 }],
                 ..Default::default()
             },
-        )
-        .unwrap();
+        )?;
 
         // Retrieve a single compute queue.
-        let queue = queues.next().unwrap();
+        let queue = queues
+            .next()
+            .ok_or_else(|| PrfError::VulkanError("can't find a compute queue".to_owned(), None))?;
 
         let pipeline = {
-            let shader =
-                unsafe { ShaderModule::from_words(device.clone(), compute_shader).unwrap() };
+            let shader = unsafe { ShaderModule::from_words(device.clone(), compute_shader)? };
 
             ComputePipeline::new(
                 device.clone(),
-                shader.entry_point("ProgPoW").unwrap(),
+                shader.entry_point("ProgPoW").ok_or_else(|| {
+                    PrfError::VulkanError("can't find a shader entry point".to_owned(), None)
+                })?,
                 &(),
                 None,
                 |_| {},
-            )
-            .unwrap()
+            )?
         };
 
         let memory_allocator = StandardMemoryAllocator::new_default(device.clone());
@@ -537,28 +696,25 @@ mod vulkan {
                     ..Default::default()
                 },
                 input_data,
-            )
-            .unwrap()
+            )?
         };
-        // dbg!(input_buffer.size());
 
         // Create a descriptor set for the buffer.
-        // FIXME: unwrap panics if loop_count == 0
-        let layout = pipeline.layout().set_layouts().get(0).unwrap();
+        let layout = pipeline.layout().set_layouts().get(0).ok_or_else(|| {
+            PrfError::VulkanError("descriptor set layout hasn't been found".to_owned(), None)
+        })?;
         let set = PersistentDescriptorSet::new(
             &descriptor_set_allocator,
             layout.clone(),
             [WriteDescriptorSet::buffer(0, input_buffer.clone())],
-        )
-        .unwrap();
+        )?;
 
         // Build a command buffer.
         let mut builder = AutoCommandBufferBuilder::primary(
             &command_buffer_allocator,
             queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
-        )
-        .unwrap();
+        )?;
 
         builder
             .bind_pipeline_compute(pipeline.clone())
@@ -568,25 +724,22 @@ mod vulkan {
                 0,
                 set,
             )
-            .dispatch([1, 1, 1]) // FIXME: correct number of groups
-            .unwrap();
+            .dispatch([1, 1, 1])?; // FIXME: correct number of groups
 
-        let command_buffer = builder.build().unwrap();
+        let command_buffer = builder.build()?;
 
         // Execute the command buffer.
         let future = sync::now(device)
-            .then_execute(queue, command_buffer)
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap();
+            .then_execute(queue, command_buffer)?
+            .then_signal_fence_and_flush()?;
 
         // Block execution until the GPU has finished the operation.
         let timeout = None;
-        future.wait(timeout).unwrap();
+        future.wait(timeout)?;
 
         // Retrieve the buffer contents - it should now contain the mixed data.
-        let output_buffer_content = input_buffer.read().unwrap();
-        (*output_buffer_content).clone()
+        let output_buffer_content = input_buffer.read()?;
+        Ok((*output_buffer_content).clone())
     }
 
     // Vulkan-specific tests
@@ -682,7 +835,7 @@ mod vulkan {
             println!("{}", buffer);
 
             let compute_shader = compile_kernel(buffer).unwrap();
-            let res = execute(&compute_shader, inputs);
+            let res = execute(&compute_shader, inputs).unwrap();
 
             for (idx, x) in res.iter().skip(1).step_by(2).enumerate() {
                 assert_eq!(expected[idx], *x);
@@ -730,7 +883,7 @@ mod vulkan {
             println!("{}", buffer);
 
             let compute_shader = compile_kernel(buffer).unwrap();
-            let res = execute(&compute_shader, inputs);
+            let res = execute(&compute_shader, inputs).unwrap();
 
             for r in res {
                 println!("{}", hex::encode(r.to_be_bytes()));
@@ -743,6 +896,13 @@ mod vulkan {
 
         #[test]
         fn test_progpow() {
+            {
+                let buffer = generate_kernel(&[0; INPUT_HASH_SIZE], 0);
+                println!("{}", buffer);
+
+                let compute_shader = compile_kernel(buffer).unwrap();
+                let _res = execute(&compute_shader, [0u32; 512]);
+            }
             {
                 let mix_lane = [0u32; PROGPOW_REGS * PROGPOW_LANES];
                 let expected = [
@@ -838,7 +998,7 @@ mod vulkan {
                 println!("{}", buffer);
 
                 let compute_shader = compile_kernel(buffer).unwrap();
-                let res = execute(&compute_shader, mix_lane);
+                let res = execute(&compute_shader, mix_lane).unwrap();
 
                 for (idx, r) in res.iter().enumerate() {
                     assert_eq!(*r, expected[idx]);
@@ -1033,7 +1193,7 @@ mod vulkan {
                 );
 
                 let compute_shader = compile_kernel(buffer).unwrap();
-                let res = execute(&compute_shader, mix_lane);
+                let res = execute(&compute_shader, mix_lane).unwrap();
 
                 for (idx, r) in res.iter().enumerate() {
                     assert_eq!(*r, expected[idx]);

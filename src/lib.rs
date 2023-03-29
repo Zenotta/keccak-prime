@@ -503,52 +503,56 @@ impl<P: Permutation> KeccakState<P> {
             self.fill_block();
         }
 
-        let read_bits = ((self.offset_bits & 7) + bits + 7) & !7; // round up the number of bits to the nearest 8
-        let mut buffer = vec![0; read_bits / 8]; // temp buffer that may need to hold more bytes than `output`
+        let read_bits_rounded = ((self.offset_bits & 7) + bits + 7) & !7; // round up the number of bits to the nearest 8
+                                                                          // to allocate a buffer of the appropriate size.
+        let mut buffer = vec![0; read_bits_rounded / 8]; // temp buffer that may need to hold more bytes than `output`
 
         // second foldp
         let mut op = 0; // output position - in bytes
-        let mut l = bits; // in bits
+        let mut remaining = bits; // remaining number of bits to read
         let mut rate_bits = self.rate * 8 - self.offset_bits;
         let mut offset_bits = self.offset_bits;
 
         // This part is executed only if the number of bits requested is greater than
         // the number of bits we already have got in Keccak-state.
         // In `squeeze_bits`, this part has no differences from the regular `squeeze` function.
-        while l >= rate_bits {
+        while remaining >= rate_bits {
+            // Get the remaining bits and squeeze the sponge
             self.buffer
                 .setout(&mut buffer[op..], offset_bits / 8, rate_bits / 8);
             self.keccak();
 
             op += rate_bits / 8;
-            l -= rate_bits;
+            remaining -= rate_bits;
             rate_bits = self.rate * 8;
             offset_bits = 0;
         }
 
-        // Squeeze the remainder
-        // dbg!(offset_bits & 7, offset_bits, read_bits, l);
-
-        self.buffer
-            .setout(&mut buffer[op..], offset_bits / 8, read_bits / 8);
+        // Get bits from the current Keccak state
+        self.buffer.setout(
+            &mut buffer[op..],
+            offset_bits / 8,
+            (((self.offset_bits & 7) + (remaining + 7)) & !7) / 8,
+        );
 
         // FIXME: is there a better way to do this?
         let mut bitvec = buffer
             .view_bits::<Msb0>()
             .to_owned()
-            .split_off(offset_bits & 7);
+            .split_off(self.offset_bits & 7);
         bitvec.truncate(bits);
         bitvec.force_align();
 
-        // pad to the required length
+        // pad to the byte boundary
         // FIXME: make this more efficient
-        let pad_count = ((l + 7) & !7) - l;
+        let pad_count = ((bitvec.len() + 7) & !7) - bitvec.len();
         for _i in 0..pad_count {
             bitvec.insert(0, false);
         }
 
         output.copy_from_slice(bitvec.as_raw_slice());
-        self.offset_bits = offset_bits + l;
+
+        self.offset_bits = offset_bits + remaining;
     }
 
     /// Squeezes Keccak state into a 256-bit string.

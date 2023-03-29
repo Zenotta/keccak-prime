@@ -50,7 +50,6 @@ impl Keccak {
 
     /// Creates new [`Keccak`] hasher with a specified rate.
     pub fn new(bits: usize) -> Keccak {
-        // dbg!(bits, bits_to_rate(bits));
         Keccak {
             state: KeccakState::new(bits_to_rate(bits), Self::DELIM),
         }

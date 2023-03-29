@@ -9,7 +9,7 @@ pub const BLOCK_HEADER_SIZE: usize = 80; // in bytes; 640 bits
 pub const INPUT_HASH_SIZE: usize = 32; // 256 bits
 /// Input nonce size, in bytes.
 pub const NONCE_SIZE: usize = 10; // 80 bits
-/// fixme
+/// Target hash length, in bytes.
 pub const HASH_LENGTH: usize = 32; // 256 bits
 /// Size of the result of VDF.
 pub const WITNESS_SIZE: usize = 200; // 1600 bits

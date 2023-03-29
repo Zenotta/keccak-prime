@@ -3,11 +3,39 @@
 use crate::{
     constants::{INPUT_HASH_SIZE, MAX, NONCE_SIZE},
     expansion::expand,
-    prf::prf,
+    prf::{prf, PrfError},
     sha3::Sha3,
     sloth, Hasher,
 };
-use std::convert::TryInto;
+use std::{convert::TryInto, error::Error, fmt};
+
+/// Error occurred during the computation of the block linking function.
+#[derive(Debug)]
+pub enum KeccakPrimeError {
+    /// Error occurred during the pseudorandom function execution.
+    PrfError(PrfError),
+}
+
+impl fmt::Display for KeccakPrimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use KeccakPrimeError::*;
+        match self {
+            PrfError(prf) => write!(f, "Pseudorandom function error: {}", prf),
+        }
+    }
+}
+
+impl From<PrfError> for KeccakPrimeError {
+    fn from(value: PrfError) -> Self {
+        KeccakPrimeError::PrfError(value)
+    }
+}
+
+impl Error for KeccakPrimeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        None
+    }
+}
 
 /// Keccak-prime block linking function.
 ///
@@ -24,6 +52,7 @@ use std::convert::TryInto;
 /// ### Returns
 /// - `witness` number. It can be verified using the [crate::vdf::verify] function.
 /// - `output_hash`.
+#[allow(clippy::too_many_arguments)]
 pub fn link_blocks(
     block_k_root_hash: [u8; INPUT_HASH_SIZE],
     prev_block_root_hash: [u8; INPUT_HASH_SIZE],
@@ -33,7 +62,7 @@ pub fn link_blocks(
     penalty: u16,
     delay: u16,
     loop_count: u16,
-) -> (Vec<u8>, [u8; INPUT_HASH_SIZE]) {
+) -> Result<(Vec<u8>, [u8; INPUT_HASH_SIZE]), KeccakPrimeError> {
     // Expand the block header to the VDF domain.
     let vdf_input = expand(
         prev_hash,
@@ -54,7 +83,7 @@ pub fn link_blocks(
         &block_k_root_hash,
         &witness_bytes[0..200].try_into().unwrap(), // FIXME
         loop_count,
-    );
+    )?;
 
     // Hash the results
     let mut hash_bytes = Vec::with_capacity(y.len() + INPUT_HASH_SIZE * 3 + NONCE_SIZE);
@@ -71,7 +100,7 @@ pub fn link_blocks(
     let mut h = Sha3::v256();
     h.update(&hash_bytes);
 
-    (witness_bytes, h.finalize_with_penalty(penalty))
+    Ok((witness_bytes, h.finalize_with_penalty(penalty)))
 }
 
 #[cfg(test)]
@@ -121,12 +150,13 @@ mod tests {
             penalty,
             delay,
             loop_count,
-        );
+        )
+        .unwrap();
 
         println!(
             "output_hash: {}\n witness: {}",
-            hex::encode(&output_hash),
-            hex::encode(&witness)
+            hex::encode(output_hash),
+            hex::encode(witness)
         );
 
         assert_eq!(output_hash, expected);
